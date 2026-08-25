@@ -1,0 +1,25 @@
+# Example: fingerprint as an alternative to the password.
+#
+# Put this line ABOVE your password module. The file to edit depends on the
+# distribution:
+#
+#   Debian/Ubuntu   /etc/pam.d/common-auth
+#   Fedora/RHEL     /etc/pam.d/system-auth   (use authselect if configured)
+#   Arch            /etc/pam.d/system-local-login
+#   openSUSE        /etc/pam.d/common-auth-pc
+#
+# and separately for sudo, your screen locker, polkit-1, sshd, as you like.
+#
+# ALWAYS test in a second terminal while the first stays logged in as root.
+
+auth    sufficient  pam_synafp.so   timeout=15 retries=3
+
+# Options:
+#   timeout=N   seconds to wait for a finger (default 15)
+#   retries=N   touches allowed before giving up (default 3)
+#   quiet       suppress informational messages
+#   debug       log protocol detail to syslog
+#
+# The module returns PAM_IGNORE when fingerprint auth is merely unavailable
+# (no sensor, nothing enrolled, no permission, user declined), so a
+# `sufficient` line falls through to the password prompt instead of failing.

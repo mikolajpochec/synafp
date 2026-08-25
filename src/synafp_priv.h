@@ -56,11 +56,28 @@ typedef struct {
     int            line_width;
     int            repeat_multiplier;
     int            lines_per_calibration_data;
+    int            key_calibration_line;
+    int            calibration_frames;
+    int            calibration_iterations;
+    int            line_update_type;
     const uint8_t *prog;
     size_t         prog_len;
     const uint8_t *calib_blob;
     size_t         calib_blob_len;
 } syna_type_info;
+
+/* Identification table: (major, version) as reported by command 0x75. */
+typedef struct {
+    uint16_t    major;
+    uint16_t    type;
+    uint8_t     version;
+    uint8_t     version_mask;
+    const char *name;
+} syna_dev_info;
+
+extern const syna_dev_info syna_dev_info_table[];
+extern const int syna_dev_info_table_len;
+const syna_dev_info *syna_dev_info_lookup(uint16_t major, uint16_t version);
 
 /* Initialisation blobs, per device (see src/synafp_tables.c). */
 typedef struct {
@@ -99,6 +116,7 @@ struct syna_dev {
     /* capture state, filled in by syna_sensor_setup() */
     const syna_type_info *type_info;
     uint16_t              sensor_type;
+    const char           *model_name;
     int                   key_calibration_line;
     int                   lines_per_frame;
     syna_buf              factory_calib;  /* factory calibration values */

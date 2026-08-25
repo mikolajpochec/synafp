@@ -16,12 +16,16 @@ echo "==> checking build dependencies"
 have "${CC:-cc}" || have gcc || have clang || die "no C compiler found (install gcc or clang)"
 have make        || die "make not found"
 have pkg-config  || die "pkg-config not found"
-pkg-config --exists libusb-1.0 || die "libusb-1.0 development files not found.
-  Debian/Ubuntu : apt install libusb-1.0-0-dev libpam0g-dev build-essential pkg-config
-  Fedora/RHEL   : dnf install libusb1-devel pam-devel gcc make pkgconf-pkg-config
-  Arch          : pacman -S libusb pam base-devel
-  openSUSE      : zypper install libusb-1_0-devel pam-devel gcc make pkg-config
-  Alpine        : apk add libusb-dev linux-pam-dev build-base pkgconf"
+DEPS_HELP="
+  Debian/Ubuntu : apt install build-essential pkg-config libusb-1.0-0-dev libssl-dev libpam0g-dev
+  Fedora/RHEL   : dnf install gcc make pkgconf-pkg-config libusb1-devel openssl-devel pam-devel
+  Arch          : pacman -S base-devel libusb openssl pam
+  openSUSE      : zypper install gcc make pkg-config libusb-1_0-devel libopenssl-devel pam-devel
+  Alpine        : apk add build-base pkgconf libusb-dev openssl-dev linux-pam-dev
+  Void          : xbps-install base-devel pkg-config libusb-devel openssl-devel pam-devel"
+
+pkg-config --exists libusb-1.0 || die "libusb-1.0 development files not found.$DEPS_HELP"
+pkg-config --exists libcrypto  || die "OpenSSL development files not found.$DEPS_HELP"
 [ -f /usr/include/security/pam_modules.h ] || \
   echo "install.sh: warning: PAM headers not found; pam_synafp.so may fail to build"
 
@@ -50,6 +54,15 @@ fi
 
 echo
 echo "Done. Verify with:"
-echo "    synafp info"
+echo "    sudo synafp info"
+echo
+echo "Most commands need root: the TLS session key derives from the DMI"
+echo "product serial, which only root can read."
+echo
+echo "Per-line calibration data is required before the sensor will detect a"
+echo "finger, and synafp cannot generate it yet. If python-validity has run"
+echo "on this machine, import what it produced:"
+echo "    sudo synafp calib-import /var/run/python-validity/calib-data.bin"
+echo
 echo "Then enrol a finger:"
-echo "    synafp enroll right-index"
+echo "    sudo synafp enroll right-index"

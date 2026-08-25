@@ -12,6 +12,8 @@ BINDIR      ?= $(PREFIX)/bin
 LIBDIR      ?= $(PREFIX)/lib
 INCLUDEDIR  ?= $(PREFIX)/include
 UDEVDIR     ?= /usr/lib/udev/rules.d
+DATADIR     ?= $(PREFIX)/share
+STATEDIR    ?= /var/lib/synafp
 PAMDIR      ?= $(shell test -d /lib/security && echo /lib/security || \
                         (test -d /usr/lib64/security && echo /usr/lib64/security || \
                          echo /usr/lib/security))
@@ -29,7 +31,8 @@ WARN        := -Wall -Wextra -Wno-unused-parameter
 CFLAGS      ?= -O2 -g
 # -MMD -MP makes every object depend on the headers it includes, so a struct
 # change cannot leave stale objects with mismatched layouts.
-ALL_CFLAGS  := -std=c99 $(WARN) $(CFLAGS) $(USB_CFLAGS) $(SSL_CFLAGS) -Isrc -MMD -MP
+ALL_CFLAGS  := -std=c99 $(WARN) $(CFLAGS) $(USB_CFLAGS) $(SSL_CFLAGS) -Isrc -MMD -MP \
+               -DSYNA_STATEDIR=\"$(STATEDIR)\"
 LDLIBS      := $(USB_LIBS) $(SSL_LIBS)
 
 LIB_SRC     := src/synafp_core.c src/synafp_vcsfw.c src/synafp_tls.c \
@@ -58,6 +61,13 @@ $(SONAME): $(LIB_PIC)
 	$(CC) $(ALL_CFLAGS) -shared -Wl,-soname,$(SONAME) -o $@ $^ $(LDLIBS)
 	ln -sf $(SONAME) libsynafp.so
 
+# Generated with an absolute path so the module can be tested before install.
+synafp-test: dist/synafp-test.in
+	sed 's|@MODULE@|$(CURDIR)/pam_synafp.so|g' $< > $@
+
+pamtest: tools/pamtest.c
+	$(CC) $(ALL_CFLAGS) -o $@ $< -lpam
+
 check: synafp
 	./synafp --help >/dev/null && echo "smoke test ok"
 
@@ -71,6 +81,8 @@ install: all
 	install -m 0755 pam_synafp.so $(DESTDIR)$(PAMDIR)/pam_synafp.so
 	install -d $(DESTDIR)$(UDEVDIR)
 	install -m 0644 dist/70-synafp.rules $(DESTDIR)$(UDEVDIR)/70-synafp.rules
+	install -d $(DESTDIR)$(DATADIR)/synafp
+	install -m 0644 dist/synafp-pam-example $(DESTDIR)$(DATADIR)/synafp/pam-example
 	@echo
 	@echo "Installed. Reload udev and replug/rescan the sensor:"
 	@echo "  udevadm control --reload-rules && udevadm trigger --subsystem-match=usb"
@@ -86,7 +98,7 @@ DEPS := $(LIB_OBJ:.o=.d) $(LIB_PIC:.lo=.d) src/synafp_cli.d src/pam_synafp.d
 -include $(DEPS)
 
 clean:
-	rm -f synafp $(LIB_OBJ) $(LIB_PIC) src/*.o src/*.lo src/*.d \
+	rm -f synafp pamtest synafp-test $(LIB_OBJ) $(LIB_PIC) src/*.o src/*.lo src/*.d \
 	      libsynafp.so libsynafp.so.* pam_synafp.so
 
-.PHONY: all install uninstall clean check
+.PHONY: all install uninstall clean check pamtest

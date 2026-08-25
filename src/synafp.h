@@ -142,6 +142,7 @@ void  syna_set_debug(int level);
 const char *syna_serial(const syna_dev *d);
 uint16_t syna_product_id(const syna_dev *d);
 int   syna_has_session(const syna_dev *d);
+const char *syna_model_name(const syna_dev *d);
 
 /* --- informational ------------------------------------------------------- */
 int syna_fw_version_get(syna_dev *d, syna_fw_version *out);
@@ -221,7 +222,10 @@ int syna_db_user_storage(syna_dev *d, const char *name, uint16_t *dbid);
 /* Scan a finger and check it belongs to this user. Returns SYNA_ERR_NOT_FOUND
  * if the user has nothing enrolled. */
 int syna_verify(syna_dev *d, const char *username, syna_match_result *out);
-#define SYNA_CALIB_DEFAULT_PATH "/var/lib/synafp/calib-data.bin"
+#ifndef SYNA_STATEDIR
+#define SYNA_STATEDIR "/var/lib/synafp"
+#endif
+#define SYNA_CALIB_DEFAULT_PATH SYNA_STATEDIR "/calib-data.bin"
 
 int syna_load_calibration(syna_dev *d, const char *path);
 int syna_save_calibration(syna_dev *d, const char *path);

@@ -16,6 +16,28 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 
+/* Vendor matching rules: an exact masked version wins; a zero mask or zero
+ * version is only a fallback. */
+const syna_dev_info *syna_dev_info_lookup(uint16_t major, uint16_t version)
+{
+    const syna_dev_info *fuzzy = NULL;
+    int i;
+
+    for (i = 0; i < syna_dev_info_table_len; i++) {
+        const syna_dev_info *e = &syna_dev_info_table[i];
+        uint8_t masked;
+
+        if (e->major != major)
+            continue;
+        masked = (uint8_t)(e->version & e->version_mask);
+        if (version == 0 || masked == 0)
+            fuzzy = e;
+        else if ((uint8_t)version == masked)
+            return e;
+    }
+    return fuzzy;
+}
+
 const syna_type_info *syna_type_lookup(uint16_t sensor_type)
 {
     int i;
@@ -525,10 +547,18 @@ int syna_build_capture_program(syna_dev *d, syna_capture_mode mode, syna_buf *ou
     int rc;
 
     if ((rc = chunks_split(&cs, ti->prog, ti->prog_len)) != SYNA_OK) goto out;
+    if (ti->line_update_type != 1) {
+        /* Only the type 1 variant is implemented; the table records which a
+         * sensor needs so an unsupported one fails cleanly. */
+        syna_dbg("sensor type 0x%04x needs line update variant %d",
+                 ti->sensor_type, ti->line_update_type);
+        rc = SYNA_ERR_UNSUPPORTED;
+        goto out;
+    }
     if ((rc = line_update_type_1(d, mode, &cs)) != SYNA_OK) goto out;
 
     if (mode == SYNA_CAPTURE_CALIBRATE)
-        req_lines = (uint16_t)(3 * d->lines_per_frame + 1);
+        req_lines = (uint16_t)(ti->calibration_frames * d->lines_per_frame + 1);
 
     hdr[0] = 2;
     hdr[1] = (uint8_t)ti->bytes_per_line;
@@ -602,6 +632,7 @@ done:
 
 int syna_sensor_setup(syna_dev *d)
 {
+    const syna_dev_info *info;
     uint16_t major = 0, minor = 0;
     int rc;
 
@@ -612,21 +643,23 @@ int syna_sensor_setup(syna_dev *d)
     if (rc != SYNA_OK)
         return rc;
 
-    /* dev_info_lookup maps (major, version) to a sensor type; the one unit we
-     * have tables for is major 0x0190 -> type 0x0199. */
-    if (major == 0x0190)
-        d->sensor_type = 0x0199;
-    else
-        d->sensor_type = major;
+    info = syna_dev_info_lookup(major, minor);
+    if (!info) {
+        syna_dbg("unrecognised sensor: major 0x%04x version 0x%04x", major, minor);
+        return SYNA_ERR_UNSUPPORTED;
+    }
+    d->sensor_type = info->type;
+    d->model_name = info->name;
+    syna_dbg("sensor model '%s', type 0x%04x", info->name, info->type);
 
     d->type_info = syna_type_lookup(d->sensor_type);
     if (!d->type_info) {
-        syna_dbg("no capture tables for sensor type 0x%04x", d->sensor_type);
+        syna_dbg("no capture tables for sensor type 0x%04x ('%s')",
+                 d->sensor_type, info->name);
         return SYNA_ERR_UNSUPPORTED;
     }
 
-    /* Hardcoded per sensor type, as in the Windows driver. */
-    d->key_calibration_line = 0x38;
+    d->key_calibration_line = d->type_info->key_calibration_line;
     d->lines_per_frame = 0;
 
     if (!d->calib_data.len &&

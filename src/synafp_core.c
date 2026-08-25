@@ -481,5 +481,10 @@ int syna_has_session(const syna_dev *d)
     return d && d->tls.secure_tx && d->tls.secure_rx;
 }
 
+const char *syna_model_name(const syna_dev *d)
+{
+    return (d && d->model_name) ? d->model_name : "unknown";
+}
+
 const char *syna_serial(const syna_dev *d) { return d ? d->serial : ""; }
 uint16_t syna_product_id(const syna_dev *d) { return d ? d->pid : 0; }

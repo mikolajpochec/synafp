@@ -227,6 +227,8 @@ int main(int argc, char **argv)
 
     } else if (!strcmp(cmd, "info")) {
         printf("Sensor        : %04x (serial %s)\n", syna_product_id(d), syna_serial(d));
+        if (syna_sensor_setup(d) == SYNA_OK)
+            printf("Model         : %s\n", syna_model_name(d));
 
         if (syna_fw_version_get(d, &fw) == SYNA_OK) {
             int k;
@@ -271,6 +273,15 @@ int main(int argc, char **argv)
         else
             printf("Sensor type   : unavailable (%s)\n", syna_strerror(rc));
 
+        rc = syna_sensor_setup(d);
+        if (rc == SYNA_OK)
+            printf("Model         : %s\n", syna_model_name(d));
+        else
+            printf("Model         : unsupported (%s)\n", syna_strerror(rc));
+
+        printf("Calibration   : %s\n",
+               syna_have_calibration(d) ? "per-line data loaded" : "no per-line data");
+
         rc = syna_calib_state(d, &ci);
         if (rc == SYNA_OK) {
             const char *s;
@@ -280,7 +291,7 @@ int main(int argc, char **argv)
             case SYNA_CALIB_BAD_HASH:  s = "present but corrupt"; break;
             default:                   s = "malformed"; break;
             }
-            printf("Calibration   : %s", s);
+            printf("Reference img : %s", s);
             if (ci.state != SYNA_CALIB_ABSENT)
                 printf(" (%u bytes, magic 0x%04x)", ci.length, ci.magic);
             printf("\n");

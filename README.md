@@ -1,20 +1,67 @@
 # synafp
 
-A self-contained userspace driver for Synaptics match-on-chip fingerprint
-sensors — the `06cb:` vendor-class readers fitted to ThinkPads (X1 Carbon /
-X1 Yoga gen 3 and later, T480/T490, P52s and relatives).
+A userspace driver for Synaptics/Validity **VCSFW** fingerprint sensors — the
+match-on-chip readers fitted to many ThinkPads and other business laptops.
 
-It depends on **libusb-1.0 and libc only**. No libfprint, no fprintd, no
-D-Bus, no polkit, no Python, no kernel module, no systemd unit. It builds
-with `make` on any Linux or BSD system that has libusb, and the PAM module
-drops into any PAM stack.
+It depends only on **libusb-1.0, OpenSSL and libc**. No libfprint, no fprintd,
+no D-Bus, no polkit, no Python, no kernel module, no systemd unit. It builds
+with `make` on any Linux system with those two libraries, and ships a PAM
+module that drops into any PAM stack.
 
-## Why this exists
+## Supported hardware
 
-These sensors do all the matching on the chip; the host never sees a
-fingerprint image. Communication is a Synaptics-specific two-layer protocol
-over four USB endpoints, which is why the sensor is inert without a driver
-that speaks it. This is a fresh implementation of that protocol.
+| USB ID | Sensor | Status |
+|--------|--------|--------|
+| `06cb:009a` | Synaptics, sensor type `0x199` | developed and tested against this |
+| `138a:0090` | Validity | initialisation blobs present, untested |
+| `138a:0097` | Validity | initialisation blobs present, untested |
+| `138a:009d` | Validity | initialisation blobs present, untested |
+
+Identification is table-driven (422 models), so an unrecognised sensor reports
+its model name and exits cleanly rather than misbehaving. Capture additionally
+needs per-type data; currently only sensor type `0x199` has it, and only the
+type 1 line-update variant is implemented.
+
+`06cb:009a` is worth calling out: it is **not** supported by libfprint, whose
+synaptics driver covers a different protocol family entirely and whose ID
+table starts at `0x00BD`. The usb.ids description ("Metallica MIS Touch")
+misleadingly suggests otherwise.
+
+## Status
+
+| Capability | State |
+|---|---|
+| USB transport, device discovery | working |
+| VCSFW command layer, flash access | working |
+| Sensor initialisation | working |
+| TLS 1.2 session | working |
+| Credential recovery and host binding | working |
+| Capture | working |
+| Matching / verification | working |
+| Enrolment | working |
+| Template database enumeration | working |
+| PAM module | built, lightly tested |
+| Generating calibration data | **not implemented** — see below |
+| Deleting a single enrolment | not implemented |
+| Pairing an unpaired sensor | not implemented |
+
+### The calibration caveat
+
+The sensor stores a reference image in its own flash, but the *per-line
+calibration table* is host-side state. Without it the sensor arms but never
+detects a finger. synafp can load and use that table, but **cannot yet
+generate it** — that needs the multi-frame averaging pipeline, which is not
+implemented.
+
+If you have previously run python-validity, import the table it produced:
+
+```sh
+sudo synafp calib-import /var/run/python-validity/calib-data.bin
+```
+
+It is installed to `/var/lib/synafp/calib-data.bin` and loaded automatically
+thereafter. On a machine that has never been calibrated, synafp cannot
+currently bring the sensor up on its own.
 
 ## Building
 
@@ -22,167 +69,193 @@ that speaks it. This is a fresh implementation of that protocol.
 make
 ```
 
-Dependencies: a C compiler, `make`, `pkg-config`, `libusb-1.0` headers, and
-(for the PAM module) PAM headers.
+Requires a C compiler, `make`, `pkg-config`, and the development files for
+`libusb-1.0`, `OpenSSL` (libcrypto) and `PAM`.
 
-| Distribution  | Packages                                                             |
-|---------------|----------------------------------------------------------------------|
-| Debian/Ubuntu | `build-essential pkg-config libusb-1.0-0-dev libpam0g-dev`            |
-| Fedora/RHEL   | `gcc make pkgconf-pkg-config libusb1-devel pam-devel`                 |
-| Arch          | `base-devel libusb pam`                                              |
-| openSUSE      | `gcc make pkg-config libusb-1_0-devel pam-devel`                      |
-| Alpine        | `build-base pkgconf libusb-dev linux-pam-dev`                         |
-| Void          | `base-devel pkg-config libusb-devel pam-devel`                        |
+| Distribution | Packages |
+|---|---|
+| Debian/Ubuntu | `build-essential pkg-config libusb-1.0-0-dev libssl-dev libpam0g-dev` |
+| Fedora/RHEL | `gcc make pkgconf-pkg-config libusb1-devel openssl-devel pam-devel` |
+| Arch | `base-devel libusb openssl pam` |
+| openSUSE | `gcc make pkg-config libusb-1_0-devel libopenssl-devel pam-devel` |
+| Alpine | `build-base pkgconf libusb-dev openssl-dev linux-pam-dev` |
+| Void | `base-devel pkg-config libusb-devel openssl-devel pam-devel` |
 
 ## Installing
 
 ```sh
-./dist/install.sh              # or: sudo make install
+sudo make install          # or: ./dist/install.sh
 ```
 
-This installs `synafp`, `libsynafp.so`, `synafp.h`, `pam_synafp.so` and a
-udev rule that hands the sensor to the user on the active local seat, so you
-do not need root for day-to-day use.
-
-`PREFIX`, `BINDIR`, `LIBDIR`, `PAMDIR`, `UDEVDIR` and `DESTDIR` are all
-honoured, so distro packaging is straightforward.
+`PREFIX`, `BINDIR`, `LIBDIR`, `PAMDIR`, `UDEVDIR`, `DATADIR`, `STATEDIR` and
+`DESTDIR` are all honoured, so distribution packaging is straightforward.
 
 ## Using it
 
 ```sh
-synafp info                    # sensor identity, firmware, storage use
-synafp enroll right-index      # record a finger (touch repeatedly when asked)
-synafp verify                  # check a finger against your templates
-synafp list                    # what is stored on the sensor
-synafp delete right-index      # remove one finger
-synafp clear                   # wipe the sensor's template store
+sudo synafp info                  # sensor identity, firmware, flash layout
+sudo synafp enroll right-index    # record a finger (touch repeatedly)
+sudo synafp verify                # check a finger belongs to you
+sudo synafp identify              # match against every enrolled record
+sudo synafp db                    # what is stored on the sensor
 ```
 
-Finger names are `left-thumb … left-little` and `right-thumb … right-little`
-(numbers 1–10 also work). Exit status is `0` on success, `2` on a clean
-non-match, `1` on error.
+Finger names are `left-` / `right-` plus `thumb`, `index`, `middle`, `ring`,
+`little`. Exit status is `0` on success, `2` on a clean non-match, `1` on
+error.
 
-Useful global options: `-u <user>` to act on another user id, `-t <seconds>`
-to bound how long the sensor waits for a finger, `-r` to USB-reset a wedged
-sensor, and `-v` / `-vv` for protocol tracing.
+Useful options: `-u <user>` to act on another account, `-s <serial>` to pick a
+sensor, `-r` to USB-reset a wedged one, `-v` / `-vv` for protocol tracing.
 
-Templates live in the sensor's own flash, keyed by the user id string, so
-there is no host-side database to back up, corrupt, or keep in sync.
-Capacity is typically ten fingers.
+### Why it needs root
+
+The TLS session key is derived from this machine's DMI product name and
+serial, and `/sys/class/dmi/id/product_serial` is readable only by root. Any
+process opening a session must therefore be privileged. This is why the
+reference implementation also runs as a root service. PAM modules already run
+as root, so login works; the CLI needs `sudo`.
+
+The shipped udev rule still earns its place — it grants the local seat access
+to the device node, which is enough for the unprivileged subset (`info`,
+`creds`, `sensor`, `-n`).
 
 ## PAM integration
 
-Add the module *above* your password module. On Debian/Ubuntu edit
-`/etc/pam.d/common-auth`; on Fedora/RHEL `/etc/pam.d/system-auth`; on Arch
-`/etc/pam.d/system-local-login` (and `sudo`, `polkit-1`, your screen locker,
-etc. as you like):
+See `dist/synafp-pam-example`. In short, above your password module:
 
 ```
 auth  sufficient  pam_synafp.so  timeout=15 retries=3
-auth  include     system-auth
 ```
 
-Module options:
+The module returns `PAM_IGNORE` — not an error — whenever fingerprint
+authentication is merely *unavailable*: no sensor, nothing enrolled for this
+user, no permission, or the user declined to touch the reader. A `sufficient`
+line therefore falls through to the password prompt rather than locking anyone
+out. Only a finger that reads successfully but belongs to another record is an
+authentication failure.
 
-| Option       | Meaning                                                   |
-|--------------|-----------------------------------------------------------|
-| `timeout=N`  | seconds to wait for a finger before giving up (default 15)|
-| `retries=N`  | touches allowed before falling through (default 3)        |
-| `quiet`      | suppress informational messages                           |
-| `debug`      | log protocol detail to syslog                             |
+**Test it safely first.** A throwaway service and a harness are provided, so
+you never have to experiment on a real login path:
 
-The module returns `PAM_IGNORE` — not an error — whenever fingerprint auth
-is merely *unavailable*: no sensor, no enrolled finger for this user, no
-permission, or the user pressed Ctrl-C instead of touching the reader. A
-`sufficient` line therefore falls through to the password prompt rather than
-locking you out. Only an actual mismatch produces `PAM_AUTH_ERR`.
-
-> Test a new PAM configuration in a second terminal while the first stays
-> logged in as root. A broken auth stack is much easier to fix that way.
-
-## Using the library
-
-```c
-#include <synafp.h>
-
-syna_dev *d;
-syna_match m;
-
-if (syna_open(&d, NULL, 0) == SYNA_OK) {
-    if (syna_verify(d, "alice", &m, NULL, NULL) == SYNA_OK && m.matched)
-        puts("welcome");
-    syna_close(d);
-}
+```sh
+make pamtest synafp-test
+sudo install -m 0644 synafp-test /etc/pam.d/synafp-test
+sudo ./pamtest
 ```
 
-Link with `-lsynafp`. Every call returns `SYNA_OK` (0) or a negative code;
-`syna_strerror()` renders it, including sensor-reported statuses.
+Only once that behaves as expected should you touch `common-auth` and
+friends — and then always with a second terminal open as root.
 
-## The protocol, briefly
+## Security properties, and their limits
 
-Two nested layers over the sensor's bulk endpoints:
+Read this before relying on it for anything that matters.
+
+- **Fingerprints are a convenience factor, not a secret.** You leave them on
+  every surface you touch, and you cannot change them. Treat this as "instead
+  of retyping a password on a machine you are already sitting at", not as a
+  strong second factor.
+- **Matching happens on the sensor.** The host never sees a fingerprint image,
+  and templates never leave the chip. A compromised host cannot read out
+  enrolled fingerprints through this driver.
+- **The host binding is weak by design.** The key protecting the client
+  private key in flash derives from the laptop's DMI product name and serial,
+  plus constants extracted from the vendor driver. Those constants are public
+  and the DMI values are not secret — anyone with root on this machine, or
+  with physical access and the ability to read the DMI, can derive the same
+  key. It binds a sensor to a *chassis*, not to a *user*.
+- **`syna_verify` checks identity; `syna_match` does not.** Matching alone
+  reports which record a finger belongs to. Authenticating a named user must
+  resolve that user's record and insist the match points at it, or any
+  enrolled finger would authenticate any account. The PAM module uses
+  `syna_verify`.
+- **Anyone with root can enrol a finger.** There is no confirmation of user
+  presence beyond the touch itself, so root can add their own finger to your
+  account. Root can already do anything, but it is worth knowing that a
+  fingerprint enrolment survives a password change.
+- **No anti-replay on the USB link beyond TLS.** The session protects against
+  passive sniffing of the bus. It is not a defence against a malicious device
+  substituted in place of the sensor.
+- **Not audited.** This is a reverse-engineered driver written against an
+  undocumented protocol. It has not had a security review.
+
+If you want fingerprint login on a machine holding anything sensitive, keep
+full-disk encryption with a real passphrase at boot, and treat the fingerprint
+as unlocking a session, not a vault.
+
+## How it works
+
+Two layers over the sensor's bulk endpoints:
 
 ```
-FW layer      EP 0x01 OUT / 0x81 IN
-  request     [fw_cmd] ...
-  reply       [status:u16le] ...
-
-BMKT layer    carried inside FW command 0xA7
-  message     [0xFE][seq][msg_id][payload_len][payload...]
+VCSFW command   EP 0x01 OUT : [cmd][args...]
+VCSFW reply     EP 0x81 IN  : [status:u16le][data...]
 ```
 
-A command is sent once; long-running operations (enrolment, matching) then
-emit a stream of responses. The sensor raises bit 2 of the first byte on
-interrupt endpoint `0x83` to say another message is waiting, and the host
-fetches it by issuing FW command `0xA8` and reading `0x81` again. Finger
-touch and lift arrive as unsolicited `0x91` events at any point. Cancellation
-is a `0x41` command on the running sequence number, answered with `0x42`.
+Almost everything interesting requires a TLS 1.2 session, which is tunnelled
+through command `0x44` during the handshake and then carried as bare TLS
+records. The session is TLS in shape but not in detail — cipher suite `0xC005`
+(ECDH-ECDSA-AES256-CBC-SHA), MAC-then-encrypt with HMAC-SHA256, and several
+length fields that are simply wrong with respect to RFC 5246 and must be
+reproduced wrongly to interoperate. A stock TLS library cannot be pointed at
+it.
 
-`syna_run_op()` in `src/synafp_core.c` implements exactly that loop; the
-operations in `src/synafp_ops.c` are response handlers plugged into it.
+The client credentials are not stored on the host. They live in the sensor's
+own flash (partition 1, readable without a session), with the private key
+encrypted under a key derived from this machine's DMI identity. That is what
+binds a paired sensor to one laptop.
+
+A capture is driven by a *program*: a list of type/length/value chunks the
+firmware executes. A base program is stored per sensor type, and must be
+patched before every scan — the timeslot table is rewritten for the sensor
+geometry and calibration values are spliced in.
+
+Source map:
+
+```
+src/synafp.h          public API and protocol constants
+src/synafp_priv.h     internals shared across the library
+src/synafp_core.c     USB transport, discovery, session lifecycle
+src/synafp_vcsfw.c    command layer, flash access, initialisation
+src/synafp_tls.c      the bespoke TLS channel
+src/synafp_capture.c  capture program build, scan, matching, calibration
+src/synafp_db.c       on-sensor template database
+src/synafp_enroll.c   enrolment and verification
+src/synafp_cli.c      the synafp command
+src/pam_synafp.c      PAM module
+src/synafp_tables.c   GENERATED - see tools/gen_tables.py
+tools/gen_tables.py   regenerates the tables (needs python-validity)
+tools/pamtest.c       PAM harness that touches no real auth stack
+```
 
 ## Troubleshooting
 
-**`permission denied opening the USB device`** — the udev rule is not active.
-`sudo udevadm control --reload-rules && sudo udevadm trigger --subsystem-match=usb`,
-then replug or reboot. Running `sudo synafp info` confirms the driver itself
-works.
+**`permission denied`** — most commands need root; see "Why it needs root".
 
-**`no supported Synaptics fingerprint sensor found`** — check `lsusb | grep 06cb`.
-If the sensor is missing entirely it may be disabled in the BIOS
-(Security → I/O Port Access → Fingerprint Reader).
+**`no supported fingerprint sensor found`** — check `lsusb | grep -Ei '06cb|138a'`.
+If absent, the reader may be disabled in the BIOS (Security → I/O Port Access).
 
-**Sensor wedged after a Windows boot or a crashed client** — `synafp -r info`
-forces a USB reset. `syna_open()` also resets and retries automatically when
-its first probe fails.
+**`sensor is paired to a different computer`** — the credentials in flash do
+not decrypt with this machine's DMI identity. The sensor was paired elsewhere;
+re-pairing is not implemented.
 
-**`this finger is already enrolled`** — the sensor still holds a template for
-that user id and finger. `synafp list`, then `synafp delete <finger>`.
+**Touching the sensor does nothing** — almost always missing calibration data.
+See "The calibration caveat".
 
-**Fingerprints enrolled under Windows** are stored in the same on-chip flash
-under Windows' own user ids and cannot be reused. `synafp clear` frees the
-slots.
+**Sensor disappears from the bus mid-command** — the firmware crashed and
+re-enumerated. It recovers on its own; `synafp -r` forces a reset.
 
-**Conflicts with other stacks.** If `fprintd`, `python-validity` or
-`open-fprintd` is running they will fight over the device. Stop and disable
-them before using synafp:
-`systemctl disable --now fprintd python3-validity open-fprintd`.
+**Conflicts.** `fprintd`, `python-validity` and `open-fprintd` will contend for
+the device. Stop them before using synafp.
 
-## Layout
+## Provenance and licence
 
-```
-src/synafp.h        public API and protocol constants
-src/synafp_priv.h   internals shared across the library
-src/synafp_core.c   USB transport, BMKT framing, command engine
-src/synafp_ops.c    enrol / verify / identify / list / delete / info
-src/synafp_cli.c    the synafp command
-src/pam_synafp.c    PAM module
-dist/70-synafp.rules
-dist/install.sh
-```
+LGPL-2.1-or-later; see `LICENSE`.
 
-## Licence
-
-LGPL-2.1-or-later. The protocol constants follow the BMKT command set
-published by Synaptics in libfprint's driver, which is under the same
-licence.
+The capture programs, sensor geometry tables and initialisation blobs in
+`src/synafp_tables.c` originate in Synaptics' Windows driver. They are
+reproduced here the same way [python-validity](https://github.com/uunicorn/python-validity)
+distributes them, and `tools/gen_tables.py` extracts them from that project
+rather than duplicating the extraction. This driver is an independent
+implementation of the protocol; python-validity was used as protocol
+documentation and as a correctness oracle — the generated capture programs are
+verified byte-identical against it.

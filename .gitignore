@@ -4,3 +4,6 @@
 *.so
 *.so.*
 /synafp
+/pamtest
+/synafp-test
+*.d
