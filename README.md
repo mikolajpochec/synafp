@@ -3,11 +3,6 @@
 A userspace driver for Synaptics/Validity **VCSFW** fingerprint sensors — the
 match-on-chip readers fitted to many ThinkPads and other business laptops.
 
-It depends only on **libusb-1.0, OpenSSL and libc**. No libfprint, no fprintd,
-no D-Bus, no polkit, no Python, no kernel module, no systemd unit. It builds
-with `make` on any Linux system with those two libraries, and ships a PAM
-module that drops into any PAM stack.
-
 ## Supported hardware
 
 | USB ID | Sensor | Status |
@@ -29,21 +24,13 @@ misleadingly suggests otherwise.
 
 ## Status
 
-| Capability | State |
-|---|---|
-| USB transport, device discovery | working |
-| VCSFW command layer, flash access | working |
-| Sensor initialisation | working |
-| TLS 1.2 session | working |
-| Credential recovery and host binding | working |
-| Capture | working |
-| Matching / verification | working |
-| Enrolment | working |
-| Template database enumeration | working |
-| PAM module | built, lightly tested |
-| Generating calibration data | implemented, needs wider testing |
-| Deleting enrolments | working |
-| Pairing an unpaired sensor | not implemented |
+Working and tested on hardware: sessions, capture, matching, enrolment,
+verification, deletion, and the on-sensor database.
+
+Not verified: the PAM module builds but has had little real use, and
+`synafp calibrate` has never been run against a sensor.
+
+Not implemented: pairing a sensor whose credentials have been wiped.
 
 ### Calibration
 
@@ -139,6 +126,23 @@ line therefore falls through to the password prompt rather than locking anyone
 out. Only a finger that reads successfully but belongs to another record is an
 authentication failure.
 
+Screen lockers (`hyprlock`, `swaylock`, and friends) authenticate as the
+locked-out user rather than as root, so the module cannot reach the DMI serial
+itself. It hands off to `synafp-auth`, a small setuid helper — the same shape
+of solution `pam_unix` uses with `unix_chkpwd`. `make install` puts it in
+place; without it, lockers fall through to the password every time.
+
+To wire it into login, the display manager and the screen locker in one go:
+
+```sh
+sudo ./dist/enable-pam.sh          # edits the right stack, keeps a backup
+sudo ./dist/enable-pam.sh --undo   # puts it back
+```
+
+On Arch that is `system-login`, which covers `login`, `sddm`, `hyprlock` and
+anything else including `login` — and deliberately *not* `sudo` or `su`, which
+go straight to `system-auth`.
+
 **Test it safely first.** A throwaway service and a harness are provided, so
 you never have to experiment on a real login path:
 
@@ -155,83 +159,51 @@ friends — and then always with a second terminal open as root.
 
 Read this before relying on it for anything that matters.
 
-- **Fingerprints are a convenience factor, not a secret.** You leave them on
-  every surface you touch, and you cannot change them. Treat this as "instead
-  of retyping a password on a machine you are already sitting at", not as a
-  strong second factor.
-- **Matching happens on the sensor.** The host never sees a fingerprint image,
-  and templates never leave the chip. A compromised host cannot read out
-  enrolled fingerprints through this driver.
-- **The host binding is weak by design.** The key protecting the client
-  private key in flash derives from the laptop's DMI product name and serial,
-  plus constants extracted from the vendor driver. Those constants are public
-  and the DMI values are not secret — anyone with root on this machine, or
-  with physical access and the ability to read the DMI, can derive the same
-  key. It binds a sensor to a *chassis*, not to a *user*.
-- **`syna_verify` checks identity; `syna_match` does not.** Matching alone
-  reports which record a finger belongs to. Authenticating a named user must
-  resolve that user's record and insist the match points at it, or any
-  enrolled finger would authenticate any account. The PAM module uses
-  `syna_verify`.
-- **Anyone with root can enrol a finger.** There is no confirmation of user
-  presence beyond the touch itself, so root can add their own finger to your
-  account. Root can already do anything, but it is worth knowing that a
-  fingerprint enrolment survives a password change.
-- **No anti-replay on the USB link beyond TLS.** The session protects against
-  passive sniffing of the bus. It is not a defence against a malicious device
-  substituted in place of the sensor.
-- **Not audited.** This is a reverse-engineered driver written against an
-  undocumented protocol. It has not had a security review.
+- **A fingerprint is a convenience factor, not a secret.** You leave copies of
+  it everywhere and cannot change it. Good for unlocking a session you are
+  already sitting at; weak for anything granting new authority. See
+  `dist/synafp-pam-example` for where not to put it.
+- **Matching happens on the sensor.** The host never sees an image, and
+  templates never leave the chip.
+- **The host binding is weak by design.** The key protecting the private key
+  derives from the laptop's DMI values plus constants from the vendor driver.
+  None of that is secret: it binds a sensor to a *chassis*, not to a *user*.
+- **Anyone with root can enrol a finger** onto any account, and that survives a
+  password change. Enrolment and deletion are logged to `LOG_AUTH`; `synafp db`
+  shows what is stored.
+- **Not audited.** Reverse-engineered, against an undocumented protocol.
 
-What the code does about the above, so far:
+What the code does about it: root is needed only for the DMI read and the USB
+claim, both inside `syna_open()`, and the CLI drops privileges immediately
+after — so every parser fed by the sensor runs unprivileged. The build is
+hardened (PIE, RELRO, stack protector, `_FORTIFY_SOURCE`), derived keys are
+wiped on close, the DMI serial is never logged, and `tools/fuzzparse.c` runs
+the device-facing parsers under ASan and UBSan.
 
-- **Privilege separation.** Root is needed for exactly two things, both inside
-  `syna_open()`: reading the DMI serial and claiming the USB device. The CLI
-  calls `syna_drop_privileges()` immediately afterwards, so the TLS handshake,
-  every parser fed by the sensor, and the capture program builder all run
-  unprivileged. A parser bug is then not a root bug. (The PAM module cannot do
-  this — it has to stay root — so that path remains the exposed one.)
-- **Hardened build.** PIE, full RELRO, `BIND_NOW`, stack protector and
-  `_FORTIFY_SOURCE=2` by default; override with `HARDEN=`.
-- **Fuzzed parsers.** `tools/fuzzparse.c` hammers the parsers reachable from
-  device replies; 300k iterations under ASan and UBSan are clean. This found a
-  real bug: the database walk recursed on whatever child list the sensor
-  reported and would have blown the stack on a cycle.
-- **Key hygiene.** Derived keys are wiped with `OPENSSL_cleanse` on close, and
-  the DMI serial is never written to logs even at maximum verbosity.
-- **Audit trail.** Enrolment and deletion are logged to `LOG_AUTH`, since both
-  change who can log in.
-
-If you want fingerprint login on a machine holding anything sensitive, keep
-full-disk encryption with a real passphrase at boot, and treat the fingerprint
-as unlocking a session, not a vault.
+The PAM module is the exception: it has to stay root, so that path keeps the
+full exposure.
 
 ## How it works
 
-Two layers over the sensor's bulk endpoints:
+Commands go out on bulk endpoint `0x01` and replies come back on `0x81`,
+prefixed with a little-endian status word. Almost everything interesting
+requires a TLS 1.2 session, tunnelled through command `0x44` during the
+handshake and then carried as bare TLS records.
 
-```
-VCSFW command   EP 0x01 OUT : [cmd][args...]
-VCSFW reply     EP 0x81 IN  : [status:u16le][data...]
-```
-
-Almost everything interesting requires a TLS 1.2 session, which is tunnelled
-through command `0x44` during the handshake and then carried as bare TLS
-records. The session is TLS in shape but not in detail — cipher suite `0xC005`
-(ECDH-ECDSA-AES256-CBC-SHA), MAC-then-encrypt with HMAC-SHA256, and several
-length fields that are simply wrong with respect to RFC 5246 and must be
+The session is TLS in shape but not in detail — cipher suite `0xC005`, and
+several length fields that are wrong with respect to RFC 5246 and must be
 reproduced wrongly to interoperate. A stock TLS library cannot be pointed at
-it.
+it, which is why the handshake is implemented by hand.
 
-The client credentials are not stored on the host. They live in the sensor's
-own flash (partition 1, readable without a session), with the private key
-encrypted under a key derived from this machine's DMI identity. That is what
-binds a paired sensor to one laptop.
+The client credentials are not on the host. They live in the sensor's flash
+(partition 1, readable without a session) with the private key encrypted under
+a key derived from this machine's DMI identity — that is what binds a paired
+sensor to one laptop.
 
-A capture is driven by a *program*: a list of type/length/value chunks the
-firmware executes. A base program is stored per sensor type, and must be
-patched before every scan — the timeslot table is rewritten for the sensor
-geometry and calibration values are spliced in.
+A scan is driven by a *program*: type/length/value chunks the firmware
+executes. A stock program per sensor type is patched before every scan, with
+the timeslot table rewritten for the sensor geometry and calibration spliced
+in.
 
 Source map:
 

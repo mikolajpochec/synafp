@@ -20,12 +20,20 @@
 #include <security/pam_ext.h>
 #include <security/pam_appl.h>
 
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <unistd.h>
 #include <syslog.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <errno.h>
 
 #include "synafp.h"
+
+#ifndef SYNAFP_HELPER
+#define SYNAFP_HELPER "/usr/local/libexec/synafp-auth"
+#endif
 
 #define DEFAULT_TIMEOUT_S 15
 #define DEFAULT_RETRIES    3
@@ -67,6 +75,32 @@ static void tell(pam_handle_t *pamh, const struct opts *o, int style, const char
     pam_prompt(pamh, style, NULL, "%s", msg);
 }
 
+/* Screen lockers authenticate as the locked-out user, so the module cannot
+ * reach the DMI serial itself. Hand off to the setuid helper, the same shape
+ * of solution pam_unix uses with unix_chkpwd. */
+static int verify_via_helper(const char *user)
+{
+    pid_t pid;
+    int status;
+
+    pid = fork();
+    if (pid < 0)
+        return -1;
+
+    if (pid == 0) {
+        execl(SYNAFP_HELPER, "synafp-auth", user, (char *) NULL);
+        _exit(2);                       /* helper missing: unavailable */
+    }
+
+    while (waitpid(pid, &status, 0) < 0) {
+        if (errno != EINTR)
+            return -1;
+    }
+    if (!WIFEXITED(status))
+        return -1;
+    return WEXITSTATUS(status);
+}
+
 PAM_EXTERN int pam_sm_authenticate(pam_handle_t *pamh, int flags,
                                    int argc, const char **argv)
 {
@@ -85,6 +119,33 @@ PAM_EXTERN int pam_sm_authenticate(pam_handle_t *pamh, int flags,
 
     if (o.debug)
         syna_set_debug(1);
+
+    if (geteuid() != 0) {
+        /* Unprivileged caller: the helper does the work. */
+        for (attempt = 0; attempt < o.retries; attempt++) {
+            tell(pamh, &o, PAM_TEXT_INFO, "Touch the fingerprint sensor.");
+
+            switch (verify_via_helper(user)) {
+            case 0:
+                pam_syslog(pamh, LOG_INFO,
+                           "synafp: '%s' authenticated by fingerprint", user);
+                return PAM_SUCCESS;
+            case 1:
+                ret = PAM_AUTH_ERR;
+                if (attempt + 1 < o.retries)
+                    tell(pamh, &o, PAM_ERROR_MSG, "Fingerprint not recognised.");
+                continue;
+            default:
+                if (o.debug)
+                    pam_syslog(pamh, LOG_DEBUG,
+                               "synafp: helper reports fingerprint unavailable");
+                return PAM_IGNORE;
+            }
+        }
+        if (ret == PAM_AUTH_ERR)
+            pam_syslog(pamh, LOG_NOTICE, "synafp: fingerprint rejected for '%s'", user);
+        return ret;
+    }
 
     rc = syna_open(&d, NULL, 0);
     if (rc != SYNA_OK) {

@@ -13,6 +13,7 @@ LIBDIR      ?= $(PREFIX)/lib
 INCLUDEDIR  ?= $(PREFIX)/include
 UDEVDIR     ?= /usr/lib/udev/rules.d
 DATADIR     ?= $(PREFIX)/share
+LIBEXECDIR  ?= $(PREFIX)/libexec
 STATEDIR    ?= /var/lib/synafp
 PAMDIR      ?= $(shell test -d /lib/security && echo /lib/security || \
                         (test -d /usr/lib64/security && echo /usr/lib64/security || \
@@ -37,7 +38,8 @@ CFLAGS      ?= -O2 -g
 # -MMD -MP makes every object depend on the headers it includes, so a struct
 # change cannot leave stale objects with mismatched layouts.
 ALL_CFLAGS  := -std=c99 $(WARN) $(HARDEN) $(CFLAGS) $(USB_CFLAGS) $(SSL_CFLAGS) -Isrc \
-               -MMD -MP -DSYNA_STATEDIR=\"$(STATEDIR)\"
+               -MMD -MP -DSYNA_STATEDIR=\"$(STATEDIR)\" \
+               -DSYNAFP_HELPER=\"$(LIBEXECDIR)/synafp-auth\"
 LDLIBS      := $(USB_LIBS) $(SSL_LIBS)
 
 LIB_SRC     := src/synafp_core.c src/synafp_vcsfw.c src/synafp_tls.c \
@@ -49,7 +51,7 @@ LIB_PIC     := $(LIB_SRC:.c=.lo)
 SOVER       := 1
 SONAME      := libsynafp.so.$(SOVER)
 
-all: synafp $(SONAME) pam_synafp.so
+all: synafp synafp-auth $(SONAME) pam_synafp.so
 
 %.o: %.c
 	$(CC) $(ALL_CFLAGS) -c $< -o $@
@@ -58,6 +60,9 @@ all: synafp $(SONAME) pam_synafp.so
 	$(CC) $(ALL_CFLAGS) -fPIC -c $< -o $@
 
 synafp: src/synafp_cli.o $(LIB_OBJ)
+	$(CC) $(ALL_CFLAGS) $(HARDEN_LD) -o $@ $^ $(LDLIBS)
+
+synafp-auth: src/synafp_auth.o $(LIB_OBJ)
 	$(CC) $(ALL_CFLAGS) $(HARDEN_LD) -o $@ $^ $(LDLIBS)
 
 pam_synafp.so: src/pam_synafp.lo $(LIB_PIC)
@@ -83,6 +88,10 @@ check: synafp
 install: all
 	install -d $(DESTDIR)$(BINDIR) $(DESTDIR)$(LIBDIR) $(DESTDIR)$(INCLUDEDIR)
 	install -m 0755 synafp        $(DESTDIR)$(BINDIR)/synafp
+	install -d $(DESTDIR)$(LIBEXECDIR)
+	# setuid: screen lockers authenticate as the locked-out user and cannot
+	# reach the DMI serial themselves.
+	install -m 4755 synafp-auth   $(DESTDIR)$(LIBEXECDIR)/synafp-auth
 	install -m 0755 $(SONAME)     $(DESTDIR)$(LIBDIR)/$(SONAME)
 	ln -sf $(SONAME)              $(DESTDIR)$(LIBDIR)/libsynafp.so
 	install -m 0644 src/synafp.h  $(DESTDIR)$(INCLUDEDIR)/synafp.h
@@ -98,16 +107,18 @@ install: all
 
 uninstall:
 	rm -f $(DESTDIR)$(BINDIR)/synafp
+	rm -f $(DESTDIR)$(LIBEXECDIR)/synafp-auth
 	rm -f $(DESTDIR)$(LIBDIR)/$(SONAME) $(DESTDIR)$(LIBDIR)/libsynafp.so
 	rm -f $(DESTDIR)$(INCLUDEDIR)/synafp.h
 	rm -f $(DESTDIR)$(PAMDIR)/pam_synafp.so
 	rm -f $(DESTDIR)$(UDEVDIR)/70-synafp.rules
 
-DEPS := $(LIB_OBJ:.o=.d) $(LIB_PIC:.lo=.d) src/synafp_cli.d src/pam_synafp.d
+DEPS := $(LIB_OBJ:.o=.d) $(LIB_PIC:.lo=.d) src/synafp_cli.d src/pam_synafp.d \
+        src/synafp_auth.d
 -include $(DEPS)
 
 clean:
-	rm -f synafp pamtest fuzzparse synafp-test $(LIB_OBJ) $(LIB_PIC) src/*.o src/*.lo src/*.d \
+	rm -f synafp synafp-auth pamtest fuzzparse synafp-test $(LIB_OBJ) $(LIB_PIC) src/*.o src/*.lo src/*.d \
 	      libsynafp.so libsynafp.so.* pam_synafp.so
 
 .PHONY: all install uninstall clean check pamtest
