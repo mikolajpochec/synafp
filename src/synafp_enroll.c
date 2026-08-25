@@ -575,3 +575,21 @@ out:
     syna_buf_free(&ident);
     return rc;
 }
+
+/* Resolve a system account to its record id on the sensor. */
+int syna_lookup_user_by_name(syna_dev *d, uint16_t storage, const char *username,
+                             uint16_t *dbid)
+{
+    syna_buf ident = { 0 };
+    int rc;
+
+    if (!d || !username || !dbid)
+        return SYNA_ERR_INVAL;
+
+    rc = syna_identity_for_user(username, &ident);
+    if (rc == SYNA_OK)
+        rc = syna_db_lookup_user(d, storage, ident.p, ident.len, dbid);
+
+    syna_buf_free(&ident);
+    return rc;
+}

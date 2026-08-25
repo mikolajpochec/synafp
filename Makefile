@@ -12,6 +12,7 @@ BINDIR      ?= $(PREFIX)/bin
 LIBDIR      ?= $(PREFIX)/lib
 INCLUDEDIR  ?= $(PREFIX)/include
 UDEVDIR     ?= /usr/lib/udev/rules.d
+UNITDIR     ?= /usr/lib/systemd/system
 DATADIR     ?= $(PREFIX)/share
 LIBEXECDIR  ?= $(PREFIX)/libexec
 STATEDIR    ?= /var/lib/synafp
@@ -25,6 +26,11 @@ PKG_CONFIG  ?= pkg-config
 
 USB_CFLAGS  := $(shell $(PKG_CONFIG) --cflags libusb-1.0)
 USB_LIBS    := $(shell $(PKG_CONFIG) --libs libusb-1.0)
+# The D-Bus service is optional: it only builds where sd-bus is available.
+HAVE_SDBUS  := $(shell $(PKG_CONFIG) --exists libsystemd && echo yes)
+SDBUS_CFLAGS:= $(shell $(PKG_CONFIG) --cflags libsystemd 2>/dev/null)
+SDBUS_LIBS  := $(shell $(PKG_CONFIG) --libs libsystemd 2>/dev/null)
+
 SSL_CFLAGS  := $(shell $(PKG_CONFIG) --cflags libcrypto)
 SSL_LIBS    := $(shell $(PKG_CONFIG) --libs libcrypto)
 
@@ -51,7 +57,11 @@ LIB_PIC     := $(LIB_SRC:.c=.lo)
 SOVER       := 1
 SONAME      := libsynafp.so.$(SOVER)
 
-all: synafp synafp-auth $(SONAME) pam_synafp.so
+ifeq ($(HAVE_SDBUS),yes)
+DBUS_TARGETS := synafp-fprintd
+endif
+
+all: synafp synafp-auth $(SONAME) pam_synafp.so $(DBUS_TARGETS)
 
 %.o: %.c
 	$(CC) $(ALL_CFLAGS) -c $< -o $@
@@ -61,6 +71,12 @@ all: synafp synafp-auth $(SONAME) pam_synafp.so
 
 synafp: src/synafp_cli.o $(LIB_OBJ)
 	$(CC) $(ALL_CFLAGS) $(HARDEN_LD) -o $@ $^ $(LDLIBS)
+
+synafp-fprintd: src/synafp_fprintd.o $(LIB_OBJ)
+	$(CC) $(ALL_CFLAGS) $(HARDEN_LD) -o $@ $^ $(LDLIBS) $(SDBUS_LIBS)
+
+src/synafp_fprintd.o: src/synafp_fprintd.c
+	$(CC) $(ALL_CFLAGS) $(SDBUS_CFLAGS) -c $< -o $@
 
 synafp-auth: src/synafp_auth.o $(LIB_OBJ)
 	$(CC) $(ALL_CFLAGS) $(HARDEN_LD) -o $@ $^ $(LDLIBS)
@@ -92,6 +108,13 @@ install: all
 	# setuid: screen lockers authenticate as the locked-out user and cannot
 	# reach the DMI serial themselves.
 	install -m 4755 synafp-auth   $(DESTDIR)$(LIBEXECDIR)/synafp-auth
+ifeq ($(HAVE_SDBUS),yes)
+	install -m 0755 synafp-fprintd $(DESTDIR)$(LIBEXECDIR)/synafp-fprintd
+	install -d $(DESTDIR)$(UNITDIR)
+	sed 's|@LIBEXECDIR@|$(LIBEXECDIR)|g' dist/synafp-fprintd.service.in \
+	    > $(DESTDIR)$(UNITDIR)/synafp-fprintd.service
+	chmod 644 $(DESTDIR)$(UNITDIR)/synafp-fprintd.service
+endif
 	install -m 0755 $(SONAME)     $(DESTDIR)$(LIBDIR)/$(SONAME)
 	ln -sf $(SONAME)              $(DESTDIR)$(LIBDIR)/libsynafp.so
 	install -m 0644 src/synafp.h  $(DESTDIR)$(INCLUDEDIR)/synafp.h
@@ -112,6 +135,8 @@ install: all
 uninstall:
 	rm -f $(DESTDIR)$(BINDIR)/synafp
 	rm -f $(DESTDIR)$(LIBEXECDIR)/synafp-auth
+	rm -f $(DESTDIR)$(LIBEXECDIR)/synafp-fprintd
+	rm -f $(DESTDIR)$(UNITDIR)/synafp-fprintd.service
 	rm -f $(DESTDIR)$(LIBDIR)/$(SONAME) $(DESTDIR)$(LIBDIR)/libsynafp.so
 	rm -f $(DESTDIR)$(INCLUDEDIR)/synafp.h
 	rm -f $(DESTDIR)$(PAMDIR)/pam_synafp.so
@@ -122,7 +147,7 @@ DEPS := $(LIB_OBJ:.o=.d) $(LIB_PIC:.lo=.d) src/synafp_cli.d src/pam_synafp.d \
 -include $(DEPS)
 
 clean:
-	rm -f synafp synafp-auth pamtest fuzzparse synafp-test $(LIB_OBJ) $(LIB_PIC) src/*.o src/*.lo src/*.d \
+	rm -f synafp synafp-auth synafp-fprintd pamtest fuzzparse synafp-test $(LIB_OBJ) $(LIB_PIC) src/*.o src/*.lo src/*.d \
 	      libsynafp.so libsynafp.so.* pam_synafp.so
 
 .PHONY: all install uninstall clean check pamtest

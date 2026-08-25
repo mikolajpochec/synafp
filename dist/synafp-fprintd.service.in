@@ -1,0 +1,26 @@
+[Unit]
+Description=synafp fingerprint service (fprintd-compatible)
+Documentation=man:synafp(1)
+# Only one process can own net.reactivated.Fprint.
+Conflicts=fprintd.service open-fprintd.service
+
+[Service]
+Type=dbus
+BusName=net.reactivated.Fprint
+ExecStart=@LIBEXECDIR@/synafp-fprintd
+Restart=on-failure
+RestartSec=2
+
+# It needs root for the DMI read and the USB claim, and nothing else.
+NoNewPrivileges=no
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/synafp
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_UNIX
+MemoryDenyWriteExecute=yes
+
+[Install]
+WantedBy=multi-user.target

@@ -214,6 +214,8 @@ typedef struct {
 } syna_user_info;
 
 int syna_db_get_user(syna_dev *d, uint16_t dbid, syna_user_info *out);
+int syna_lookup_user_by_name(syna_dev *d, uint16_t storage, const char *username,
+                             uint16_t *dbid);
 int syna_db_del_record(syna_dev *d, uint16_t dbid);
 
 /* Remove one enrolled finger, or every finger, for a user. */
