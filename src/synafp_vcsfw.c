@@ -4,6 +4,7 @@
 #define _POSIX_C_SOURCE 200809L
 #include "synafp_priv.h"
 
+#include <openssl/sha.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -223,5 +224,117 @@ int syna_creds_report(syna_dev *d, FILE *out)
             rc == SYNA_OK ? "all blocks verified" : syna_strerror(rc));
 done:
     syna_buf_free(&flash);
+    return rc;
+}
+
+/* --------------------------------------------------------------------------
+ * Sensor identity and calibration state
+ * ----------------------------------------------------------------------- */
+int syna_identify_sensor(syna_dev *d, uint16_t *major, uint16_t *minor)
+{
+    uint8_t cmd = VCSFW_CMD_IDENTIFY;
+    syna_buf reply = { 0 };
+    int rc;
+
+    if (!d || !major || !minor)
+        return SYNA_ERR_INVAL;
+
+    rc = syna_vcsfw_call(d, &cmd, 1, &reply);
+    if (rc != SYNA_OK)
+        goto done;
+    if (reply.len < 2 + 8) {
+        rc = SYNA_ERR_PROTO;
+        goto done;
+    }
+    if (get_le32(reply.p + 2) != 0) {
+        rc = SYNA_ERR_PROTO;
+        goto done;
+    }
+    *minor = get_le16(reply.p + 6);
+    *major = get_le16(reply.p + 8);
+done:
+    syna_buf_free(&reply);
+    return rc;
+}
+
+/* The sensor keeps a reference "clean slate" image in partition 6. Capture
+ * cannot run without it, and its presence means calibration is already done. */
+int syna_calib_state(syna_dev *d, syna_calib_info *out)
+{
+    syna_buf head = { 0 }, img = { 0 };
+    uint8_t digest[32];
+    uint16_t magic;
+    int rc;
+
+    if (!d || !out)
+        return SYNA_ERR_INVAL;
+    memset(out, 0, sizeof *out);
+
+    rc = syna_read_flash(d, 6, 0, 0x44, &head);
+    if (rc != SYNA_OK)
+        goto done;
+    if (head.len < 0x44) {
+        rc = SYNA_ERR_PROTO;
+        goto done;
+    }
+
+    magic       = get_le16(head.p);
+    out->length = get_le16(head.p + 2);
+    out->magic  = magic;
+
+    if (magic != 0x5002) {
+        out->state = SYNA_CALIB_ABSENT;
+        rc = SYNA_OK;
+        goto done;
+    }
+    /* bytes 0x24..0x44 must be zero; 0x04..0x24 is the image hash */
+    {
+        int i;
+        for (i = 0x24; i < 0x44; i++) {
+            if (head.p[i] != 0) {
+                out->state = SYNA_CALIB_MALFORMED;
+                rc = SYNA_OK;
+                goto done;
+            }
+        }
+    }
+
+    rc = syna_read_flash_all(d, 6, 0x44, out->length, &img);
+    if (rc != SYNA_OK)
+        goto done;
+
+    SHA256(img.p, img.len, digest);
+    out->state = (memcmp(digest, head.p + 4, 32) == 0)
+               ? SYNA_CALIB_VALID : SYNA_CALIB_BAD_HASH;
+    rc = SYNA_OK;
+done:
+    syna_buf_free(&head);
+    syna_buf_free(&img);
+    return rc;
+}
+
+/* Flash reads are capped per request, so large regions come back in chunks. */
+int syna_read_flash_all(syna_dev *d, uint8_t partition, uint32_t start, uint32_t size,
+                        syna_buf *out)
+{
+    syna_buf chunk = { 0 };
+    uint32_t off;
+    int rc = SYNA_OK;
+
+    out->len = 0;
+    for (off = 0; off < size; off += 0x1000) {
+        uint32_t n = size - off;
+        if (n > 0x1000)
+            n = 0x1000;
+        rc = syna_read_flash(d, partition, start + off, n, &chunk);
+        if (rc != SYNA_OK)
+            break;
+        rc = syna_buf_add(out, chunk.p, chunk.len);
+        if (rc != SYNA_OK)
+            break;
+    }
+    syna_buf_free(&chunk);
+    if (rc == SYNA_OK && out->len > size)
+        out->len = size;
     return rc;
 }

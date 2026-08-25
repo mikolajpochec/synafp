@@ -54,6 +54,8 @@ extern "C" {
 #define VCSFW_CMD_FLASH_WRITE   0x41
 #define VCSFW_CMD_FW_INFO       0x43
 #define VCSFW_CMD_TLS_DATA      0x44
+#define VCSFW_CMD_IDENTIFY      0x75
+#define VCSFW_CMD_FACTORY_BITS  0x6f
 
 #define SYNA_TLS_PARTITION      1
 #define SYNA_TLS_FLASH_SIZE     0x1000
@@ -134,6 +136,22 @@ int   syna_has_session(const syna_dev *d);
 int syna_fw_version_get(syna_dev *d, syna_fw_version *out);
 int syna_flash_info_get(syna_dev *d, syna_flash_info *out);
 int syna_creds_report(syna_dev *d, FILE *out);
+
+typedef enum {
+    SYNA_CALIB_ABSENT = 0,   /* partition is blank: never calibrated here */
+    SYNA_CALIB_VALID,        /* reference image present and intact */
+    SYNA_CALIB_BAD_HASH,     /* present but corrupt */
+    SYNA_CALIB_MALFORMED
+} syna_calib_state_t;
+
+typedef struct {
+    syna_calib_state_t state;
+    uint16_t           magic;
+    uint16_t           length;
+} syna_calib_info;
+
+int syna_identify_sensor(syna_dev *d, uint16_t *major, uint16_t *minor);
+int syna_calib_state(syna_dev *d, syna_calib_info *out);
 
 #ifdef __cplusplus
 }

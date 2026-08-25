@@ -79,6 +79,8 @@ int syna_vcsfw_cmd(syna_dev *d, const uint8_t *cmd, size_t len, syna_buf *reply)
 int syna_vcsfw_call(syna_dev *d, const uint8_t *cmd, size_t len, syna_buf *reply);
 int syna_read_flash(syna_dev *d, uint8_t partition, uint32_t addr, uint32_t size,
                     syna_buf *out);
+int syna_read_flash_all(syna_dev *d, uint8_t partition, uint32_t start, uint32_t size,
+                        syna_buf *out);
 
 /* tls */
 int  syna_tls_set_hwkey(syna_tls *t, const char *product_name, const char *serial);

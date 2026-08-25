@@ -20,6 +20,7 @@ static void usage(FILE *f)
 "  info        sensor identity, firmware and flash layout\n"
 "  session     open a secure session and report whether it succeeded\n"
 "  creds       inspect the credential store in the sensor's flash\n"
+"  sensor      sensor model and calibration state\n"
 "\n"
 "Options:\n"
 "  -s <serial>   select a specific sensor\n"
@@ -120,6 +121,34 @@ int main(int argc, char **argv)
             fprintf(stderr, "synafp: %s\n", syna_strerror(rc));
             ret = 1;
         }
+
+    } else if (!strcmp(cmd, "sensor")) {
+        uint16_t major = 0, minor = 0;
+        syna_calib_info ci;
+
+        rc = syna_identify_sensor(d, &major, &minor);
+        if (rc == SYNA_OK)
+            printf("Sensor type   : major 0x%04x minor 0x%04x\n", major, minor);
+        else
+            printf("Sensor type   : unavailable (%s)\n", syna_strerror(rc));
+
+        rc = syna_calib_state(d, &ci);
+        if (rc == SYNA_OK) {
+            const char *s;
+            switch (ci.state) {
+            case SYNA_CALIB_VALID:     s = "present and intact"; break;
+            case SYNA_CALIB_ABSENT:    s = "absent (sensor has never been calibrated here)"; break;
+            case SYNA_CALIB_BAD_HASH:  s = "present but corrupt"; break;
+            default:                   s = "malformed"; break;
+            }
+            printf("Calibration   : %s", s);
+            if (ci.state != SYNA_CALIB_ABSENT)
+                printf(" (%u bytes, magic 0x%04x)", ci.length, ci.magic);
+            printf("\n");
+        } else {
+            printf("Calibration   : unavailable (%s)\n", syna_strerror(rc));
+        }
+        rc = SYNA_OK;
 
     } else if (!strcmp(cmd, "session")) {
         if (syna_has_session(d)) {
