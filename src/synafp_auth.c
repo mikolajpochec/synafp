@@ -114,12 +114,16 @@ int main(int argc, char **argv)
     }
 
     rc = syna_open(&d, NULL, 0);
-    if (rc != SYNA_OK)
+    if (rc != SYNA_OK) {
+        fprintf(stderr, "synafp-auth: cannot open sensor: %s\n", syna_strerror(rc));
         return EXIT_UNAVAILABLE;
+    }
 
     /* Everything privileged is done. Shed root before the sensor's replies
      * reach a single parser. */
-    if (syna_drop_privileges() != SYNA_OK) {
+    rc = syna_drop_privileges();
+    if (rc != SYNA_OK) {
+        fprintf(stderr, "synafp-auth: cannot drop privileges: %s\n", syna_strerror(rc));
         syna_close(d);
         return EXIT_UNAVAILABLE;
     }
@@ -137,10 +141,14 @@ int main(int argc, char **argv)
     }
     syna_close(d);
 
-    if (rc == SYNA_ERR_NOT_FOUND)
-        return EXIT_UNAVAILABLE;            /* nothing enrolled for this user */
-    if (rc != SYNA_OK)
+    if (rc == SYNA_ERR_NOT_FOUND) {
+        fprintf(stderr, "synafp-auth: nothing enrolled for '%s'\n", want);
         return EXIT_UNAVAILABLE;
+    }
+    if (rc != SYNA_OK) {
+        fprintf(stderr, "synafp-auth: verification failed: %s\n", syna_strerror(rc));
+        return EXIT_UNAVAILABLE;
+    }
 
     return m.matched ? EXIT_MATCH : EXIT_NO_MATCH;
 }

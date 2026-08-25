@@ -108,7 +108,7 @@ PAM_EXTERN int pam_sm_authenticate(pam_handle_t *pamh, int flags,
     const char *user = NULL;
     syna_dev *d = NULL;
     syna_match_result m;
-    int rc, attempt, ret = PAM_IGNORE;
+    int rc, attempt, ret = PAM_IGNORE, helper_rc = 0;
 
     (void)flags;
     parse_opts(&o, argc, argv);
@@ -125,7 +125,8 @@ PAM_EXTERN int pam_sm_authenticate(pam_handle_t *pamh, int flags,
         for (attempt = 0; attempt < o.retries; attempt++) {
             tell(pamh, &o, PAM_TEXT_INFO, "Touch the fingerprint sensor.");
 
-            switch (verify_via_helper(user)) {
+            helper_rc = verify_via_helper(user);
+            switch (helper_rc) {
             case 0:
                 pam_syslog(pamh, LOG_INFO,
                            "synafp: '%s' authenticated by fingerprint", user);
@@ -136,9 +137,12 @@ PAM_EXTERN int pam_sm_authenticate(pam_handle_t *pamh, int flags,
                     tell(pamh, &o, PAM_ERROR_MSG, "Fingerprint not recognised.");
                 continue;
             default:
-                if (o.debug)
-                    pam_syslog(pamh, LOG_DEBUG,
-                               "synafp: helper reports fingerprint unavailable");
+                /* Say which failure it was: 2 covers no sensor, nothing
+                 * enrolled, a busy device and a timed-out scan; 3 means the
+                 * helper refused the request; -1 means it could not be run. */
+                pam_syslog(pamh, LOG_NOTICE,
+                           "synafp: declining, helper %s exited %d",
+                           SYNAFP_HELPER, helper_rc);
                 return PAM_IGNORE;
             }
         }

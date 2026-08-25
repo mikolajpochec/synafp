@@ -175,7 +175,11 @@ int main(int argc, char **argv)
     rc = syna_open(&d, serial, flags);
     if (rc != SYNA_OK) {
         fprintf(stderr, "synafp: %s\n", syna_strerror(rc));
-        if (rc == SYNA_ERR_ACCESS)
+        if (rc == SYNA_ERR_BUSY)
+            fprintf(stderr,
+                "synafp: another fingerprint daemon holds the sensor. Disable it:\n"
+                "        sudo systemctl disable --now python3-validity open-fprintd fprintd\n");
+        else if (rc == SYNA_ERR_ACCESS)
             fprintf(stderr,
                 "synafp: deriving the session key needs the DMI product serial,\n"
                 "        which is readable only by root. Try: sudo synafp %s\n", cmd);

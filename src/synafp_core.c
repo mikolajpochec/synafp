@@ -75,7 +75,8 @@ const char *syna_strerror(int rc)
     case SYNA_ERR_NOMEM:       return "out of memory";
     case SYNA_ERR_INVAL:       return "invalid argument";
     case SYNA_ERR_ACCESS:      return "permission denied";
-    case SYNA_ERR_BUSY:        return "device is claimed by another process";
+    case SYNA_ERR_BUSY:        return "sensor is claimed by another process "
+                                      "(stop python3-validity / open-fprintd / fprintd)";
     case SYNA_ERR_UNSUPPORTED: return "operation not supported by this sensor";
     case SYNA_ERR_PAIRING:     return "sensor is paired to a different computer";
     case SYNA_ERR_NOT_FOUND:   return "no such record on the sensor";

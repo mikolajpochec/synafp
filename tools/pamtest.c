@@ -16,6 +16,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include <unistd.h>
 
 /* Relay module messages to the terminal; refuse to answer password prompts so
@@ -78,8 +79,12 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    rc = pam_authenticate(pamh, 0);
-    printf("\npam_authenticate -> %d (%s)\n", rc, pam_strerror(pamh, rc));
+    {
+        time_t t0 = time(NULL);
+        rc = pam_authenticate(pamh, 0);
+        printf("\npam_authenticate -> %d (%s) after %ld s\n",
+               rc, pam_strerror(pamh, rc), (long)(time(NULL) - t0));
+    }
 
     switch (rc) {
     case PAM_SUCCESS:
@@ -89,8 +94,14 @@ int main(int argc, char **argv)
         printf("RESULT: finger read, but rejected\n");
         break;
     case PAM_IGNORE:
-        printf("RESULT: module declined (unavailable) - a real stack would "
-               "fall through to the password prompt\n");
+    case PAM_PERM_DENIED:
+        /* A stack whose every module returns PAM_IGNORE yields
+         * PAM_PERM_DENIED, which reads like a permissions fault but is not. */
+        printf("RESULT: module declined - it returned PAM_IGNORE, so there was\n"
+               "        nothing left to satisfy the stack. In a real stack a\n"
+               "        `sufficient` line would fall through to the password.\n"
+               "        Why it declined:  journalctl -t synafp-auth -t %s -n 20\n",
+               service);
         break;
     default:
         printf("RESULT: %s\n", pam_strerror(pamh, rc));

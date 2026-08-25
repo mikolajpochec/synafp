@@ -240,8 +240,13 @@ See "The calibration caveat".
 **Sensor disappears from the bus mid-command** — the firmware crashed and
 re-enumerated. It recovers on its own; `synafp -r` forces a reset.
 
-**Conflicts.** `fprintd`, `python-validity` and `open-fprintd` will contend for
-the device. Stop them before using synafp.
+**`sensor is claimed by another process`** — another fingerprint daemon has it.
+These are usually enabled by default and get restarted whenever udev
+re-triggers the device, so disable rather than just stop them:
+
+```sh
+sudo systemctl disable --now python3-validity open-fprintd fprintd
+```
 
 ## Provenance and licence
 
