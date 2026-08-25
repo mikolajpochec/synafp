@@ -167,13 +167,23 @@ done:
     return rc;
 }
 
-/* Walk the record tree, printing what is stored. */
+#define SYNA_DB_MAX_DEPTH 8
+
+/* Walk the record tree, printing what is stored. The sensor is not a trusted
+ * input: a corrupt or malicious tree could contain a cycle, so the descent is
+ * bounded rather than relying on the data being well formed. */
 static int dump_record(syna_dev *d, uint16_t dbid, uint16_t type, int depth, FILE *out)
 {
     syna_db_record rec;
     syna_buf val = { 0 };
     uint16_t vtype = 0;
     int i, rc;
+
+    if (depth > SYNA_DB_MAX_DEPTH) {
+        fprintf(out, "%*s... (tree deeper than %d levels, stopping)\n",
+                depth * 2, "", SYNA_DB_MAX_DEPTH);
+        return SYNA_OK;
+    }
 
     /* The parent's child list gives a type, but roots have none, so prefer
      * the type the record reports for itself. */

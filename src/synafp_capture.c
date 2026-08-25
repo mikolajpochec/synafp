@@ -878,7 +878,7 @@ int syna_dump_capture_program(syna_dev *d, syna_capture_mode mode, FILE *out)
  * verdict, and 0x62 releases the result. The verdict is a TLV dictionary:
  * [u16 tag][u16 length][value].
  * ----------------------------------------------------------------------- */
-static const uint8_t *dict_get(const uint8_t *p, size_t len, uint16_t tag, uint16_t *out_len)
+const uint8_t *syna_dict_get(const uint8_t *p, size_t len, uint16_t tag, uint16_t *out_len)
 {
     while (len >= 4) {
         uint16_t t = (uint16_t)(p[0] | (p[1] << 8));
@@ -954,16 +954,16 @@ int syna_match(syna_dev *d, syna_match_result *out)
             goto done;
         }
 
-        v = dict_get(body, blen, 1, &vlen);
+        v = syna_dict_get(body, blen, 1, &vlen);
         if (v && vlen >= 4)
             out->user_id = (uint32_t)v[0] | ((uint32_t)v[1] << 8) |
                            ((uint32_t)v[2] << 16) | ((uint32_t)v[3] << 24);
 
-        v = dict_get(body, blen, 3, &vlen);
+        v = syna_dict_get(body, blen, 3, &vlen);
         if (v && vlen >= 2)
             out->subtype = (uint16_t)(v[0] | (v[1] << 8));
 
-        v = dict_get(body, blen, 4, &vlen);
+        v = syna_dict_get(body, blen, 4, &vlen);
         if (v && vlen == sizeof out->hash) {
             memcpy(out->hash, v, sizeof out->hash);
             out->have_hash = 1;

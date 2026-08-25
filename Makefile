@@ -65,6 +65,9 @@ $(SONAME): $(LIB_PIC)
 synafp-test: dist/synafp-test.in
 	sed 's|@MODULE@|$(CURDIR)/pam_synafp.so|g' $< > $@
 
+fuzzparse: tools/fuzzparse.c $(LIB_OBJ)
+	$(CC) $(ALL_CFLAGS) -o $@ $^ $(LDLIBS)
+
 pamtest: tools/pamtest.c
 	$(CC) $(ALL_CFLAGS) -o $@ $< -lpam
 
@@ -98,7 +101,7 @@ DEPS := $(LIB_OBJ:.o=.d) $(LIB_PIC:.lo=.d) src/synafp_cli.d src/pam_synafp.d
 -include $(DEPS)
 
 clean:
-	rm -f synafp pamtest synafp-test $(LIB_OBJ) $(LIB_PIC) src/*.o src/*.lo src/*.d \
+	rm -f synafp pamtest fuzzparse synafp-test $(LIB_OBJ) $(LIB_PIC) src/*.o src/*.lo src/*.d \
 	      libsynafp.so libsynafp.so.* pam_synafp.so
 
 .PHONY: all install uninstall clean check pamtest

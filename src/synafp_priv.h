@@ -131,6 +131,7 @@ int syna_db_new_record(syna_dev *d, uint16_t parent, uint16_t type, uint16_t sto
 int syna_identity_for_user(const char *username, syna_buf *out);
 
 /* capture internals */
+const uint8_t *syna_dict_get(const uint8_t *p, size_t len, uint16_t tag, uint16_t *out_len);
 int syna_build_capture_program(syna_dev *d, syna_capture_mode mode, syna_buf *out);
 int syna_interrupt_read(syna_dev *d, uint8_t *buf, int cap, int *len, unsigned timeout_ms);
 int syna_wait_interrupt(syna_dev *d, uint8_t *buf, int cap, int *len, unsigned overall_ms);
