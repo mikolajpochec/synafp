@@ -133,6 +133,7 @@ int syna_identity_for_user(const char *username, syna_buf *out);
 /* capture internals */
 const uint8_t *syna_dict_get(const uint8_t *p, size_t len, uint16_t tag, uint16_t *out_len);
 int syna_build_capture_program(syna_dev *d, syna_capture_mode mode, syna_buf *out);
+int syna_compute_lines_per_frame(syna_dev *d);
 int syna_interrupt_read(syna_dev *d, uint8_t *buf, int cap, int *len, unsigned timeout_ms);
 int syna_wait_interrupt(syna_dev *d, uint8_t *buf, int cap, int *len, unsigned overall_ms);
 
@@ -153,6 +154,14 @@ int syna_read_flash(syna_dev *d, uint8_t partition, uint32_t addr, uint32_t size
                     syna_buf *out);
 int syna_read_flash_all(syna_dev *d, uint8_t partition, uint32_t start, uint32_t size,
                         syna_buf *out);
+int syna_write_enable(syna_dev *d);
+int syna_call_cleanups(syna_dev *d);
+int syna_erase_flash(syna_dev *d, uint8_t partition);
+int syna_write_flash(syna_dev *d, uint8_t partition, uint32_t addr,
+                     const uint8_t *buf, size_t len);
+int syna_write_flash_all(syna_dev *d, uint8_t partition, uint32_t addr,
+                         const uint8_t *buf, size_t len);
+int syna_read_image(syna_dev *d, syna_buf *out, unsigned timeout_ms);
 
 /* tls */
 int  syna_tls_set_hwkey(syna_tls *t, const char *product_name, const char *serial);

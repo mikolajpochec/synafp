@@ -90,33 +90,6 @@ int syna_identity_for_user(const char *username, syna_buf *out)
 /* --------------------------------------------------------------------------
  * Database writes
  * ----------------------------------------------------------------------- */
-static int write_enable(syna_dev *d)
-{
-    const syna_dev_blobs *b = syna_blobs_lookup(d->vid, d->pid);
-    syna_buf reply = { 0 };
-    int rc;
-
-    if (!b)
-        return SYNA_ERR_UNSUPPORTED;
-    rc = syna_vcsfw_call(d, b->db_write_enable, b->db_write_enable_len, &reply);
-    syna_buf_free(&reply);
-    return rc;
-}
-
-static int call_cleanups(syna_dev *d)
-{
-    uint8_t cmd = VCSFW_CMD_CLEANUPS;
-    syna_buf reply = { 0 };
-    int rc;
-
-    rc = syna_vcsfw_call(d, &cmd, 1, &reply);
-    syna_buf_free(&reply);
-    /* "nothing to commit" is a normal answer, not a failure. */
-    if (SYNA_IS_SENSOR_ERR(rc) && SYNA_SENSOR_STATUS(rc) == 0x0491)
-        return SYNA_OK;
-    return rc;
-}
-
 int syna_db_user_storage(syna_dev *d, const char *name, uint16_t *dbid)
 {
     uint8_t cmd[64];
@@ -192,7 +165,7 @@ int syna_db_new_record(syna_dev *d, uint16_t parent, uint16_t type, uint16_t sto
     /* The reference implementation always asks for db info first. */
     syna_db_info(d, &info);
 
-    if ((rc = write_enable(d)) != SYNA_OK)
+    if ((rc = syna_write_enable(d)) != SYNA_OK)
         return rc;
 
     hdr[0] = VCSFW_CMD_DB_NEW_RECORD;
@@ -212,7 +185,7 @@ int syna_db_new_record(syna_dev *d, uint16_t parent, uint16_t type, uint16_t sto
             *recid = rd16(reply.p + 2);
     }
 done:
-    call_cleanups(d);
+    syna_call_cleanups(d);
     syna_buf_free(&cmd);
     syna_buf_free(&reply);
     return rc;
@@ -278,7 +251,7 @@ static int enrollment_update(syna_dev *d, const syna_buf *prev, syna_buf *out)
     uint8_t op = VCSFW_CMD_ENROLL_UPDATE;
     int rc;
 
-    if ((rc = write_enable(d)) != SYNA_OK)
+    if ((rc = syna_write_enable(d)) != SYNA_OK)
         return rc;
 
     if ((rc = syna_buf_add(&cmd, &op, 1)) != SYNA_OK) goto done;
@@ -290,7 +263,7 @@ static int enrollment_update(syna_dev *d, const syna_buf *prev, syna_buf *out)
         rc = syna_buf_add(out, reply.p + 2, reply.len - 2);
     }
 done:
-    call_cleanups(d);
+    syna_call_cleanups(d);
     syna_buf_free(&cmd);
     syna_buf_free(&reply);
     return rc;
@@ -539,6 +512,59 @@ int syna_verify(syna_dev *d, const char *username, syna_match_result *out)
         syna_dbg("finger belongs to record #%u, not #%u", out->user_id, expected);
         out->matched = 0;
     }
+out:
+    syna_buf_free(&ident);
+    return rc;
+}
+
+/* Remove one enrolled finger, or all of them when subtype < 0. */
+int syna_delete(syna_dev *d, const char *username, int subtype, int *removed)
+{
+    syna_buf ident = { 0 };
+    syna_user_info info;
+    uint16_t storage = 0, userid = 0;
+    int rc, i, n = 0;
+
+    if (!d || !username)
+        return SYNA_ERR_INVAL;
+    if (removed)
+        *removed = 0;
+
+    if ((rc = syna_identity_for_user(username, &ident)) != SYNA_OK)
+        goto out;
+    if ((rc = syna_db_user_storage(d, "StgWindsor", &storage)) != SYNA_OK)
+        goto out;
+    if ((rc = syna_db_lookup_user(d, storage, ident.p, ident.len, &userid)) != SYNA_OK)
+        goto out;
+    if ((rc = syna_db_get_user(d, userid, &info)) != SYNA_OK)
+        goto out;
+
+    for (i = 0; i < info.n_fingers; i++) {
+        if (subtype >= 0 && info.fingers[i].subtype != (uint16_t)subtype)
+            continue;
+        rc = syna_db_del_record(d, info.fingers[i].dbid);
+        if (rc != SYNA_OK) {
+            syna_dbg("could not delete finger record #%u: %s",
+                     info.fingers[i].dbid, syna_strerror(rc));
+            goto out;
+        }
+        syna_dbg("deleted finger record #%u (%s)",
+                 info.fingers[i].dbid, syna_subtype_name(info.fingers[i].subtype));
+        n++;
+    }
+
+    /* A user record with no fingers left serves no purpose. */
+    if (n && n == info.n_fingers) {
+        rc = syna_db_del_record(d, userid);
+        if (rc != SYNA_OK)
+            syna_dbg("finger records gone but user #%u remains: %s",
+                     userid, syna_strerror(rc));
+        rc = SYNA_OK;
+    }
+
+    if (removed)
+        *removed = n;
+    rc = n ? SYNA_OK : SYNA_ERR_NOT_FOUND;
 out:
     syna_buf_free(&ident);
     return rc;

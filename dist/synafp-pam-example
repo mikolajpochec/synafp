@@ -14,6 +14,24 @@
 
 auth    sufficient  pam_synafp.so   timeout=15 retries=3
 
+# WHERE NOT TO PUT THIS
+#
+# A fingerprint is a convenience factor, not a secret: you leave copies of it
+# on every surface you touch, it cannot be changed, and an enrolment made by
+# anyone with root survives a password change. Reasonable places for it are
+# unlocking a session you are already sitting in front of - login, screen
+# locker. Weak places are anything that grants new authority:
+#
+#   /etc/pam.d/sudo      privilege escalation to root
+#   /etc/pam.d/su
+#   /etc/pam.d/polkit-1  depends what your desktop asks polkit for
+#   /etc/pam.d/sshd      never: there is no sensor at the far end, and a
+#                        `sufficient` line here is a misconfiguration waiting
+#                        to happen
+#
+# Using it for sudo means a fingerprint lifted from your laptop lid is enough
+# to become root on that laptop. Keep a password there.
+
 # Options:
 #   timeout=N   seconds to wait for a finger (default 15)
 #   retries=N   touches allowed before giving up (default 3)

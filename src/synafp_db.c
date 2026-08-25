@@ -235,3 +235,63 @@ int syna_db_dump(syna_dev *d, FILE *out)
         fprintf(out, "  (no records)\n");
     return SYNA_OK;
 }
+
+/* --------------------------------------------------------------------------
+ * Reading a user's fingers, and removing them
+ * ----------------------------------------------------------------------- */
+int syna_db_get_user(syna_dev *d, uint16_t dbid, syna_user_info *out)
+{
+    uint8_t cmd[7];
+    syna_buf reply = { 0 };
+    int rc, i, cnt;
+
+    if (!d || !out)
+        return SYNA_ERR_INVAL;
+    memset(out, 0, sizeof *out);
+
+    cmd[0] = VCSFW_CMD_DB_USER;
+    cmd[1] = (uint8_t)dbid;
+    cmd[2] = (uint8_t)(dbid >> 8);
+    cmd[3] = 0; cmd[4] = 0;
+    cmd[5] = 0; cmd[6] = 0;
+
+    rc = syna_vcsfw_call(d, cmd, sizeof cmd, &reply);
+    if (rc != SYNA_OK)
+        goto done;
+    if (reply.len < 10) { rc = SYNA_ERR_PROTO; goto done; }
+
+    out->dbid = rd16(reply.p + 2);
+    cnt       = rd16(reply.p + 4);
+
+    if (cnt > (int)(sizeof out->fingers / sizeof out->fingers[0]))
+        cnt = (int)(sizeof out->fingers / sizeof out->fingers[0]);
+    if (reply.len < 10u + (size_t)cnt * 8) { rc = SYNA_ERR_PROTO; goto done; }
+
+    for (i = 0; i < cnt; i++) {
+        const uint8_t *e = reply.p + 10 + i * 8;
+        out->fingers[i].dbid    = rd16(e);
+        out->fingers[i].subtype = rd16(e + 2);
+        out->fingers[i].storage = rd16(e + 4);
+        out->fingers[i].valsize = rd16(e + 6);
+    }
+    out->n_fingers = cnt;
+    rc = SYNA_OK;
+done:
+    syna_buf_free(&reply);
+    return rc;
+}
+
+int syna_db_del_record(syna_dev *d, uint16_t dbid)
+{
+    uint8_t cmd[3];
+    syna_buf reply = { 0 };
+    int rc;
+
+    cmd[0] = VCSFW_CMD_DB_DELETE;
+    cmd[1] = (uint8_t)dbid;
+    cmd[2] = (uint8_t)(dbid >> 8);
+
+    rc = syna_vcsfw_call(d, cmd, sizeof cmd, &reply);
+    syna_buf_free(&reply);
+    return rc;
+}

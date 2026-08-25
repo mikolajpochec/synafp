@@ -41,27 +41,30 @@ misleadingly suggests otherwise.
 | Enrolment | working |
 | Template database enumeration | working |
 | PAM module | built, lightly tested |
-| Generating calibration data | **not implemented** — see below |
-| Deleting a single enrolment | not implemented |
+| Generating calibration data | implemented, needs wider testing |
+| Deleting enrolments | working |
 | Pairing an unpaired sensor | not implemented |
 
-### The calibration caveat
+### Calibration
 
-The sensor stores a reference image in its own flash, but the *per-line
-calibration table* is host-side state. Without it the sensor arms but never
-detects a finger. synafp can load and use that table, but **cannot yet
-generate it** — that needs the multi-frame averaging pipeline, which is not
-implemented.
+The sensor needs two calibration artefacts before it will read a finger: a
+reference image, kept in its own flash, and a per-line correction table, which
+is host state. Without the latter the sensor arms but never detects a finger.
 
-If you have previously run python-validity, import the table it produced:
+```sh
+sudo synafp calibrate      # captures blank frames; keep clear of the sensor
+```
+
+This **erases and rewrites flash partition 6**, so it asks for confirmation
+(`-y` skips it). The correction table is written to
+`/var/lib/synafp/calib-data.bin` and loaded automatically thereafter.
+
+If python-validity has already calibrated this machine, its table can be
+imported instead of regenerating one:
 
 ```sh
 sudo synafp calib-import /var/run/python-validity/calib-data.bin
 ```
-
-It is installed to `/var/lib/synafp/calib-data.bin` and loaded automatically
-thereafter. On a machine that has never been calibrated, synafp cannot
-currently bring the sensor up on its own.
 
 ## Building
 
@@ -98,6 +101,8 @@ sudo synafp enroll right-index    # record a finger (touch repeatedly)
 sudo synafp verify                # check a finger belongs to you
 sudo synafp identify              # match against every enrolled record
 sudo synafp db                    # what is stored on the sensor
+sudo synafp delete right-index    # remove one enrolment
+sudo synafp delete all            # remove all of this user's enrolments
 ```
 
 Finger names are `left-` / `right-` plus `thumb`, `index`, `middle`, `ring`,
@@ -177,6 +182,25 @@ Read this before relying on it for anything that matters.
   substituted in place of the sensor.
 - **Not audited.** This is a reverse-engineered driver written against an
   undocumented protocol. It has not had a security review.
+
+What the code does about the above, so far:
+
+- **Privilege separation.** Root is needed for exactly two things, both inside
+  `syna_open()`: reading the DMI serial and claiming the USB device. The CLI
+  calls `syna_drop_privileges()` immediately afterwards, so the TLS handshake,
+  every parser fed by the sensor, and the capture program builder all run
+  unprivileged. A parser bug is then not a root bug. (The PAM module cannot do
+  this — it has to stay root — so that path remains the exposed one.)
+- **Hardened build.** PIE, full RELRO, `BIND_NOW`, stack protector and
+  `_FORTIFY_SOURCE=2` by default; override with `HARDEN=`.
+- **Fuzzed parsers.** `tools/fuzzparse.c` hammers the parsers reachable from
+  device replies; 300k iterations under ASan and UBSan are clean. This found a
+  real bug: the database walk recursed on whatever child list the sensor
+  reported and would have blown the stack on a cycle.
+- **Key hygiene.** Derived keys are wiped with `OPENSSL_cleanse` on close, and
+  the DMI serial is never written to logs even at maximum verbosity.
+- **Audit trail.** Enrolment and deletion are logged to `LOG_AUTH`, since both
+  change who can log in.
 
 If you want fingerprint login on a machine holding anything sensitive, keep
 full-disk encryption with a real passphrase at boot, and treat the fingerprint

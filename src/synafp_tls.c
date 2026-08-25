@@ -198,8 +198,14 @@ int syna_tls_set_hwkey_from_dmi(syna_tls *t)
         return SYNA_ERR_ACCESS;
     }
 
-    syna_dbg("host binding: product_name='%s' serial='%s'", name, serial);
-    return syna_tls_set_hwkey(t, name, serial);
+    /* The serial is an input to the session key. Log only enough to confirm
+     * it was read, never the value itself. */
+    syna_dbg("host binding: product_name='%s', serial present (%zu chars)",
+             name, strlen(serial));
+
+    rc = syna_tls_set_hwkey(t, name, serial);
+    OPENSSL_cleanse(serial, sizeof serial);
+    return rc;
 }
 
 /* --------------------------------------------------------------------------
@@ -973,6 +979,8 @@ void syna_tls_reset(syna_tls *t)
 void syna_tls_free(syna_tls *t)
 {
     syna_buf_free(&t->hs_msgs);
+    OPENSSL_cleanse(t->psk_encryption_key, sizeof t->psk_encryption_key);
+    OPENSSL_cleanse(t->psk_validation_key, sizeof t->psk_validation_key);
     free(t->cert);
     t->cert = NULL;
     if (t->priv_key)    { EC_KEY_free(t->priv_key);    t->priv_key = NULL; }

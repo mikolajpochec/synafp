@@ -142,6 +142,11 @@ void  syna_set_debug(int level);
 const char *syna_serial(const syna_dev *d);
 uint16_t syna_product_id(const syna_dev *d);
 int   syna_has_session(const syna_dev *d);
+
+/* Shed root after syna_open(). Everything the sensor feeds us is parsed
+ * afterwards, so this keeps a parser bug from being a root bug. Never call it
+ * from a PAM module. */
+int   syna_drop_privileges(void);
 const char *syna_model_name(const syna_dev *d);
 
 /* --- informational ------------------------------------------------------- */
@@ -201,6 +206,18 @@ typedef struct {
 int syna_db_info(syna_dev *d, syna_db_info_t *out);
 int syna_db_children(syna_dev *d, uint16_t dbid, syna_db_record *out);
 int syna_db_dump(syna_dev *d, FILE *out);
+
+typedef struct {
+    uint16_t dbid;
+    int      n_fingers;
+    struct { uint16_t dbid, subtype, storage, valsize; } fingers[16];
+} syna_user_info;
+
+int syna_db_get_user(syna_dev *d, uint16_t dbid, syna_user_info *out);
+int syna_db_del_record(syna_dev *d, uint16_t dbid);
+
+/* Remove one enrolled finger, or every finger, for a user. */
+int syna_delete(syna_dev *d, const char *username, int subtype, int *removed);
 const char *syna_record_type_name(uint16_t type);
 const char *syna_subtype_name(uint16_t subtype);
 int syna_subtype_from_name(const char *name);
@@ -227,6 +244,12 @@ int syna_verify(syna_dev *d, const char *username, syna_match_result *out);
 #endif
 #define SYNA_CALIB_DEFAULT_PATH SYNA_STATEDIR "/calib-data.bin"
 
+/* Progress callback for calibration; return non-zero to abandon it. */
+typedef int (*syna_calib_cb)(int step, int total, void *user);
+
+/* Capture blank frames and derive both calibration artefacts. This ERASES
+ * and rewrites flash partition 6. */
+int syna_calibrate(syna_dev *d, syna_calib_cb cb, void *user);
 int syna_load_calibration(syna_dev *d, const char *path);
 int syna_save_calibration(syna_dev *d, const char *path);
 int syna_have_calibration(const syna_dev *d);

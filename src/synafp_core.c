@@ -2,12 +2,16 @@
  * SPDX-License-Identifier: LGPL-2.1-or-later
  */
 #define _POSIX_C_SOURCE 200809L
+#define _DEFAULT_SOURCE
 #include "synafp_priv.h"
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <unistd.h>
+#include <pwd.h>
+#include <grp.h>
 
 int syna_debug_level = 0;
 
@@ -488,3 +492,66 @@ const char *syna_model_name(const syna_dev *d)
 
 const char *syna_serial(const syna_dev *d) { return d ? d->serial : ""; }
 uint16_t syna_product_id(const syna_dev *d) { return d ? d->pid : 0; }
+
+/* --------------------------------------------------------------------------
+ * Privilege separation
+ *
+ * Root is needed for exactly two things: reading the DMI serial that seeds
+ * the session key, and claiming the USB device. Both happen in syna_open().
+ * Everything afterwards - the TLS handshake, every parser fed by the sensor,
+ * the capture program builder - can run unprivileged, and should, because a
+ * memory-safety bug in any of it would otherwise be a root bug.
+ *
+ * Call this immediately after syna_open() in a program that does not need to
+ * write host state. It is deliberately not called from the library itself,
+ * and must never be used from a PAM module, which has to stay root.
+ * ----------------------------------------------------------------------- */
+int syna_drop_privileges(void)
+{
+    const char *s;
+    uid_t uid;
+    gid_t gid;
+
+    if (geteuid() != 0)
+        return SYNA_OK;                 /* nothing to drop */
+
+    /* Prefer the account that invoked us through sudo; otherwise fall back to
+     * nobody, so we still shed root even when run directly. */
+    s = getenv("SUDO_UID");
+    if (s && *s) {
+        uid = (uid_t)strtoul(s, NULL, 10);
+        s = getenv("SUDO_GID");
+        gid = (s && *s) ? (gid_t)strtoul(s, NULL, 10) : (gid_t)uid;
+    } else {
+        struct passwd *pw = getpwnam("nobody");
+        if (!pw) {
+            syna_dbg("cannot drop privileges: no nobody account");
+            return SYNA_ERR_ACCESS;
+        }
+        uid = pw->pw_uid;
+        gid = pw->pw_gid;
+    }
+
+    if (uid == 0) {
+        syna_dbg("refusing to 'drop' privileges to uid 0");
+        return SYNA_ERR_ACCESS;
+    }
+
+    if (setgroups(0, NULL) != 0) {
+        syna_dbg("setgroups failed");
+        return SYNA_ERR_ACCESS;
+    }
+    if (setgid(gid) != 0 || setuid(uid) != 0) {
+        syna_dbg("setgid/setuid failed");
+        return SYNA_ERR_ACCESS;
+    }
+
+    /* If root can be regained the drop was worthless, so verify it. */
+    if (setuid(0) == 0) {
+        syna_dbg("privileges could be regained after dropping");
+        return SYNA_ERR_ACCESS;
+    }
+
+    syna_dbg("dropped privileges to uid %u gid %u", (unsigned)uid, (unsigned)gid);
+    return SYNA_OK;
+}

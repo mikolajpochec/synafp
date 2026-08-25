@@ -398,3 +398,116 @@ done:
     syna_buf_free(&reply);
     return rc;
 }
+
+/* --------------------------------------------------------------------------
+ * Flash writes
+ *
+ * The sensor will not modify flash until it has been handed a vendor blob
+ * that unlocks writing, and changes are not durable until the cleanups
+ * command commits them.
+ * ----------------------------------------------------------------------- */
+int syna_write_enable(syna_dev *d)
+{
+    const syna_dev_blobs *b = syna_blobs_lookup(d->vid, d->pid);
+    syna_buf reply = { 0 };
+    int rc;
+
+    if (!b)
+        return SYNA_ERR_UNSUPPORTED;
+    rc = syna_vcsfw_call(d, b->db_write_enable, b->db_write_enable_len, &reply);
+    syna_buf_free(&reply);
+    return rc;
+}
+
+int syna_call_cleanups(syna_dev *d)
+{
+    uint8_t cmd = VCSFW_CMD_CLEANUPS;
+    syna_buf reply = { 0 };
+    int rc;
+
+    rc = syna_vcsfw_call(d, &cmd, 1, &reply);
+    syna_buf_free(&reply);
+    /* "nothing to commit" is a normal answer. */
+    if (SYNA_IS_SENSOR_ERR(rc) && SYNA_SENSOR_STATUS(rc) == 0x0491)
+        return SYNA_OK;
+    return rc;
+}
+
+int syna_erase_flash(syna_dev *d, uint8_t partition)
+{
+    uint8_t cmd[2];
+    syna_buf reply = { 0 };
+    int rc;
+
+    if ((rc = syna_write_enable(d)) != SYNA_OK)
+        return rc;
+
+    cmd[0] = VCSFW_CMD_FLASH_ERASE;
+    cmd[1] = partition;
+    rc = syna_vcsfw_call(d, cmd, sizeof cmd, &reply);
+    syna_buf_free(&reply);
+
+    syna_call_cleanups(d);
+    return rc;
+}
+
+int syna_write_flash(syna_dev *d, uint8_t partition, uint32_t addr,
+                     const uint8_t *buf, size_t len)
+{
+    syna_buf cmd = { 0 }, reply = { 0 };
+    uint8_t hdr[13];
+    int rc;
+
+    if ((rc = syna_write_enable(d)) != SYNA_OK)
+        return rc;
+
+    hdr[0] = VCSFW_CMD_FLASH_WRITE;
+    hdr[1] = partition;
+    hdr[2] = 1;
+    put_le16(hdr + 3, 0);
+    put_le32(hdr + 5, addr);
+    put_le32(hdr + 9, (uint32_t)len);
+
+    if ((rc = syna_buf_add(&cmd, hdr, sizeof hdr)) != SYNA_OK) goto done;
+    if ((rc = syna_buf_add(&cmd, buf, len)) != SYNA_OK) goto done;
+
+    rc = syna_vcsfw_call(d, cmd.p, cmd.len, &reply);
+done:
+    syna_call_cleanups(d);
+    syna_buf_free(&cmd);
+    syna_buf_free(&reply);
+    return rc;
+}
+
+int syna_write_flash_all(syna_dev *d, uint8_t partition, uint32_t addr,
+                         const uint8_t *buf, size_t len)
+{
+    size_t off;
+    int rc;
+
+    for (off = 0; off < len; off += 0x1000) {
+        size_t n = len - off;
+        if (n > 0x1000)
+            n = 0x1000;
+        rc = syna_write_flash(d, partition, addr + (uint32_t)off, buf + off, n);
+        if (rc != SYNA_OK)
+            return rc;
+    }
+    return SYNA_OK;
+}
+
+/* Image data comes back on its own endpoint, not the reply endpoint. */
+int syna_read_image(syna_dev *d, syna_buf *out, unsigned timeout_ms)
+{
+    int transferred = 0, e;
+
+    e = libusb_bulk_transfer(d->h, SYNA_EP_DATA, d->rx, SYNA_RX_BUFFER,
+                             &transferred, timeout_ms);
+    if (e != 0) {
+        syna_dbg("image read failed: %s", libusb_strerror(e));
+        return syna_usb_error(e);
+    }
+    syna_dbg("read %d bytes of image data", transferred);
+    out->len = 0;
+    return syna_buf_add(out, d->rx, (size_t)transferred);
+}

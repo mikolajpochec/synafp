@@ -28,15 +28,21 @@ SSL_CFLAGS  := $(shell $(PKG_CONFIG) --cflags libcrypto)
 SSL_LIBS    := $(shell $(PKG_CONFIG) --libs libcrypto)
 
 WARN        := -Wall -Wextra -Wno-unused-parameter
+
+# This code runs privileged and parses input from a peripheral, so the usual
+# hardening is not optional. Override HARDEN= to disable for debugging.
+HARDEN      ?= -D_FORTIFY_SOURCE=2 -fstack-protector-strong -fPIE
+HARDEN_LD   ?= -Wl,-z,relro,-z,now -Wl,-z,noexecstack -pie
 CFLAGS      ?= -O2 -g
 # -MMD -MP makes every object depend on the headers it includes, so a struct
 # change cannot leave stale objects with mismatched layouts.
-ALL_CFLAGS  := -std=c99 $(WARN) $(CFLAGS) $(USB_CFLAGS) $(SSL_CFLAGS) -Isrc -MMD -MP \
-               -DSYNA_STATEDIR=\"$(STATEDIR)\"
+ALL_CFLAGS  := -std=c99 $(WARN) $(HARDEN) $(CFLAGS) $(USB_CFLAGS) $(SSL_CFLAGS) -Isrc \
+               -MMD -MP -DSYNA_STATEDIR=\"$(STATEDIR)\"
 LDLIBS      := $(USB_LIBS) $(SSL_LIBS)
 
 LIB_SRC     := src/synafp_core.c src/synafp_vcsfw.c src/synafp_tls.c \
-               src/synafp_capture.c src/synafp_tables.c src/synafp_db.c src/synafp_enroll.c
+               src/synafp_capture.c src/synafp_tables.c src/synafp_db.c src/synafp_enroll.c \
+               src/synafp_calib.c
 LIB_OBJ     := $(LIB_SRC:.c=.o)
 LIB_PIC     := $(LIB_SRC:.c=.lo)
 
@@ -52,7 +58,7 @@ all: synafp $(SONAME) pam_synafp.so
 	$(CC) $(ALL_CFLAGS) -fPIC -c $< -o $@
 
 synafp: src/synafp_cli.o $(LIB_OBJ)
-	$(CC) $(ALL_CFLAGS) -o $@ $^ $(LDLIBS)
+	$(CC) $(ALL_CFLAGS) $(HARDEN_LD) -o $@ $^ $(LDLIBS)
 
 pam_synafp.so: src/pam_synafp.lo $(LIB_PIC)
 	$(CC) $(ALL_CFLAGS) -shared -o $@ $^ $(LDLIBS) -lpam

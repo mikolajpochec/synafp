@@ -10,6 +10,7 @@
 #include <unistd.h>
 #include <pwd.h>
 #include <signal.h>
+#include <syslog.h>
 
 static syna_dev *g_dev;
 static volatile sig_atomic_t g_interrupted;
@@ -35,6 +36,27 @@ static const char *current_user(void)
 
     pw = getpwuid(getuid());
     return (pw && pw->pw_name) ? pw->pw_name : "user";
+}
+
+static int calib_cb(int step, int total, void *user)
+{
+    (void)user;
+    if (g_interrupted)
+        return 1;
+    printf("  capturing blank frame %d of %d...\n", step, total);
+    fflush(stdout);
+    return 0;
+}
+
+static int confirm(const char *what)
+{
+    char buf[16];
+
+    printf("%s\nType 'yes' to continue: ", what);
+    fflush(stdout);
+    if (!fgets(buf, sizeof buf, stdin))
+        return 0;
+    return strncmp(buf, "yes", 3) == 0 && (buf[3] == '\n' || buf[3] == '\0');
 }
 
 static int enroll_cb(syna_enroll_event ev, int touches, int progress, void *user)
@@ -76,7 +98,9 @@ static void usage(FILE *f)
 "  db          list what is enrolled on the sensor\n"
 "  enroll <finger>  record a finger for this user\n"
 "  calib-import <file>  install per-line calibration data\n"
+"  calibrate   generate calibration data (rewrites sensor flash)\n"
 "  verify      scan a finger and check it is this user's\n"
+"  delete <finger|all>  remove an enrolment\n"
 "\n"
 "Finger names: left/right- thumb, index, middle, ring, little\n"
 "\n"
@@ -84,6 +108,7 @@ static void usage(FILE *f)
 "  -s <serial>   select a specific sensor\n"
 "  -u <user>     act on this user (default: the caller)\n"
 "  -c <file>     load per-line calibration data from this file\n"
+"  -y            do not ask for confirmation\n"
 "  -r            USB-reset the sensor first\n"
 "  -n            skip the TLS handshake\n"
 "  -v            protocol tracing (repeat for hex dumps)\n"
@@ -103,7 +128,7 @@ int main(int argc, char **argv)
 {
     const char *serial = NULL, *cmd, *user = NULL, *calib = NULL;
     unsigned flags = 0;
-    int verbose = 0, i, rc, ret = 0;
+    int verbose = 0, force = 0, i, rc, ret = 0;
     syna_dev *d = NULL;
     syna_fw_version fw;
     syna_flash_info fi;
@@ -116,6 +141,7 @@ int main(int argc, char **argv)
         else if (!strcmp(a, "-s") && i + 1 < argc) serial = argv[++i];
         else if (!strcmp(a, "-u") && i + 1 < argc) user = argv[++i];
         else if (!strcmp(a, "-c") && i + 1 < argc) calib = argv[++i];
+        else if (!strcmp(a, "-y")) force = 1;
         else {
             /* allow clustered -v flags such as -vv */
             const char *q = a + 1;
@@ -158,6 +184,16 @@ int main(int argc, char **argv)
 
     g_dev = d;
 
+    /* syna_open() has done everything that needs root: the DMI read and the
+     * USB claim. Only calib-import writes host state afterwards, so every
+     * other command can carry on unprivileged. */
+    if (strcmp(cmd, "calib-import") != 0 && strcmp(cmd, "calibrate") != 0) {
+        rc = syna_drop_privileges();
+        if (rc != SYNA_OK && verbose)
+            fprintf(stderr, "synafp: could not drop privileges: %s\n",
+                    syna_strerror(rc));
+    }
+
     if (calib) {
         rc = syna_load_calibration(d, calib);
         if (rc != SYNA_OK) {
@@ -183,6 +219,32 @@ int main(int argc, char **argv)
             printf("Calibration installed at %s\n", SYNA_CALIB_DEFAULT_PATH);
         }
 
+    } else if (!strcmp(cmd, "calibrate")) {
+        if (!force && !confirm(
+                "Calibration erases and rewrites flash partition 6 on the sensor,\n"
+                "and replaces any existing calibration data. Keep your hand away\n"
+                "from the reader: it captures blank frames.")) {
+            printf("Aborted.\n");
+            ret = 1;
+        } else {
+            printf("Calibrating. Do not touch the sensor.\n");
+            rc = syna_calibrate(d, calib_cb, NULL);
+            if (rc != SYNA_OK) {
+                fprintf(stderr, "synafp: calibration failed: %s\n", syna_strerror(rc));
+                ret = 1;
+            } else {
+                rc = syna_save_calibration(d, SYNA_CALIB_DEFAULT_PATH);
+                if (rc != SYNA_OK) {
+                    fprintf(stderr, "synafp: sensor calibrated, but saving %s failed: %s\n",
+                            SYNA_CALIB_DEFAULT_PATH, syna_strerror(rc));
+                    ret = 1;
+                } else {
+                    printf("Calibration complete, saved to %s\n",
+                           SYNA_CALIB_DEFAULT_PATH);
+                }
+            }
+        }
+
     } else if (!strcmp(cmd, "enroll")) {
         int subtype;
         const char *who = user ? user : current_user();
@@ -198,6 +260,11 @@ int main(int argc, char **argv)
             rc = syna_enroll(d, who, (uint16_t)subtype, enroll_cb, NULL);
             if (rc == SYNA_OK) {
                 printf("Enrolment complete.\n");
+                /* This changes who can log in as `who`, so leave a trace. */
+                openlog("synafp", LOG_PID, LOG_AUTH);
+                syslog(LOG_NOTICE, "enrolled %s for user '%s' (by uid %u)",
+                       argv[i + 1], who, (unsigned)getuid());
+                closelog();
             } else {
                 fprintf(stderr, "synafp: enrolment failed: %s\n", syna_strerror(rc));
                 ret = 1;
@@ -223,6 +290,39 @@ int main(int argc, char **argv)
         } else {
             printf("Not recognised.\n");
             ret = 2;
+        }
+
+    } else if (!strcmp(cmd, "delete")) {
+        const char *who = user ? user : current_user();
+        int subtype, n = 0;
+
+        if (i + 1 >= argc) {
+            fprintf(stderr, "synafp: delete needs a finger name, or 'all'\n");
+            ret = 1;
+        } else if (!strcmp(argv[i + 1], "all")) {
+            subtype = -1;
+            goto do_delete;
+        } else if ((subtype = syna_subtype_from_name(argv[i + 1])) < 0) {
+            fprintf(stderr, "synafp: '%s' is not a finger name\n", argv[i + 1]);
+            ret = 1;
+        } else {
+do_delete:
+            rc = syna_delete(d, who, subtype, &n);
+            if (rc == SYNA_ERR_NOT_FOUND) {
+                printf("Nothing enrolled for '%s'%s.\n", who,
+                       subtype < 0 ? "" : " on that finger");
+                ret = 2;
+            } else if (rc != SYNA_OK) {
+                fprintf(stderr, "synafp: delete failed: %s\n", syna_strerror(rc));
+                ret = 1;
+            } else {
+                printf("Removed %d enrolment%s for '%s'.\n",
+                       n, n == 1 ? "" : "s", who);
+                openlog("synafp", LOG_PID, LOG_AUTH);
+                syslog(LOG_NOTICE, "removed %d enrolment(s) for user '%s' (by uid %u)",
+                       n, who, (unsigned)getuid());
+                closelog();
+            }
         }
 
     } else if (!strcmp(cmd, "info")) {
