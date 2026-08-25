@@ -21,6 +21,7 @@
 #define _GNU_SOURCE
 
 #include <fcntl.h>
+#include <signal.h>
 #include <pwd.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -34,6 +35,29 @@
 #define EXIT_NO_MATCH     1
 #define EXIT_UNAVAILABLE  2
 #define EXIT_REFUSED      3
+
+static syna_dev *g_dev;
+
+/* A screen locker that is killed takes its PAM stack with it. Without this the
+ * helper stays blocked in a USB transfer until its own timeout expires,
+ * holding the sensor. */
+static void on_term(int sig)
+{
+    (void)sig;
+    if (g_dev)
+        syna_cancel(g_dev);
+}
+
+static void install_signal_handlers(void)
+{
+    struct sigaction sa;
+
+    memset(&sa, 0, sizeof sa);
+    sa.sa_handler = on_term;
+    sigaction(SIGTERM, &sa, NULL);
+    sigaction(SIGINT, &sa, NULL);
+    sigaction(SIGHUP, &sa, NULL);
+}
 
 /* A setuid program inherits whatever file descriptors its caller left it. If
  * 0, 1 or 2 are closed, the first file we open lands on one of them and stray
@@ -100,8 +124,17 @@ int main(int argc, char **argv)
         return EXIT_UNAVAILABLE;
     }
 
+    g_dev = d;
+    install_signal_handlers();
+
     syna_set_timeout(d, 15000);
     rc = syna_verify(d, want, &m);
+    g_dev = NULL;
+
+    if (rc == SYNA_ERR_CANCELLED) {
+        syna_close(d);
+        return EXIT_UNAVAILABLE;
+    }
     syna_close(d);
 
     if (rc == SYNA_ERR_NOT_FOUND)
