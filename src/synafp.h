@@ -161,6 +161,16 @@ typedef struct {
     uint16_t x, y, w1, w2;
 } syna_capture_result;
 
+/* Result of matching a captured image against the on-sensor database. */
+typedef struct {
+    int      matched;
+    uint32_t user_id;   /* database id, resolve via the template database */
+    uint16_t subtype;   /* which finger */
+    uint8_t  hash[32];
+    int      have_hash;
+} syna_match_result;
+
+int syna_match(syna_dev *d, syna_match_result *out);
 int syna_sensor_setup(syna_dev *d);
 int syna_dump_capture_program(syna_dev *d, syna_capture_mode mode, FILE *out);
 int syna_capture(syna_dev *d, syna_capture_mode mode, syna_capture_result *out);

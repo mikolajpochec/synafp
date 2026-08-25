@@ -24,6 +24,7 @@ static void usage(FILE *f)
 "  capture     run one scan and report where the finger landed\n"
 "  glow        exercise the sensor LED only\n"
 "  progdump    print the capture program without sending it\n"
+"  identify    scan a finger and match it against the sensor database\n"
 "\n"
 "Options:\n"
 "  -s <serial>   select a specific sensor\n"
@@ -192,6 +193,42 @@ int main(int argc, char **argv)
         if (rc != SYNA_OK) {
             fprintf(stderr, "synafp: %s\n", syna_strerror(rc));
             ret = 1;
+        }
+
+    } else if (!strcmp(cmd, "identify")) {
+        syna_capture_result cr;
+        syna_match_result m;
+
+        rc = syna_sensor_setup(d);
+        if (rc != SYNA_OK) {
+            fprintf(stderr, "synafp: sensor setup failed: %s\n", syna_strerror(rc));
+            ret = 1;
+        } else {
+            syna_glow_start(d);
+            printf("Place your finger on the sensor...\n");
+            fflush(stdout);
+
+            rc = syna_capture(d, SYNA_CAPTURE_IDENTIFY, &cr);
+            if (rc != SYNA_OK) {
+                syna_glow_end(d);
+                fprintf(stderr, "synafp: capture failed: %s\n", syna_strerror(rc));
+                ret = 1;
+            } else {
+                printf("Captured at x=%u y=%u.\n", cr.x, cr.y);
+                rc = syna_match(d, &m);
+                syna_glow_end(d);
+
+                if (rc != SYNA_OK) {
+                    fprintf(stderr, "synafp: matching failed: %s\n", syna_strerror(rc));
+                    ret = 1;
+                } else if (m.matched) {
+                    printf("Match: database user %u, finger subtype 0x%04x\n",
+                           m.user_id, m.subtype);
+                } else {
+                    printf("No match.\n");
+                    ret = 2;
+                }
+            }
         }
 
     } else if (!strcmp(cmd, "session")) {

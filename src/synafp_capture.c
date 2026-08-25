@@ -830,3 +830,114 @@ int syna_dump_capture_program(syna_dev *d, syna_capture_mode mode, FILE *out)
     syna_buf_free(&prog);
     return SYNA_OK;
 }
+
+/* --------------------------------------------------------------------------
+ * Matching
+ *
+ * After a successful capture the image sits in the sensor. 0x5e asks it to
+ * match that image against the on-flash template database, 0x60 collects the
+ * verdict, and 0x62 releases the result. The verdict is a TLV dictionary:
+ * [u16 tag][u16 length][value].
+ * ----------------------------------------------------------------------- */
+static const uint8_t *dict_get(const uint8_t *p, size_t len, uint16_t tag, uint16_t *out_len)
+{
+    while (len >= 4) {
+        uint16_t t = (uint16_t)(p[0] | (p[1] << 8));
+        uint16_t l = (uint16_t)(p[2] | (p[3] << 8));
+
+        if ((size_t)l > len - 4)
+            return NULL;
+        if (t == tag) {
+            *out_len = l;
+            return p + 4;
+        }
+        p   += 4 + l;
+        len -= 4 + l;
+    }
+    return NULL;
+}
+
+int syna_match(syna_dev *d, syna_match_result *out)
+{
+    static const uint8_t start[]   = { 0x5e, 0x02, 0xff,
+                                       0x00, 0x00,   /* storage id: any */
+                                       0x00, 0x00,   /* user id: any    */
+                                       0x01, 0x00,
+                                       0x00, 0x00,
+                                       0x00, 0x00 };
+    static const uint8_t results[] = { 0x60, 0x00, 0x00, 0x00, 0x00 };
+    static const uint8_t release[] = { 0x62, 0x00, 0x00, 0x00, 0x00 };
+
+    syna_buf reply = { 0 };
+    uint8_t ibuf[64];
+    int ilen = 0, rc;
+
+    if (!d || !out)
+        return SYNA_ERR_INVAL;
+    memset(out, 0, sizeof *out);
+
+    rc = syna_vcsfw_call(d, start, sizeof start, &reply);
+    if (rc != SYNA_OK)
+        goto done;
+
+    rc = syna_wait_interrupt(d, ibuf, sizeof ibuf, &ilen, 10000);
+    if (rc != SYNA_OK)
+        goto done;
+
+    if (ilen < 1 || ibuf[0] != 3) {
+        /* The sensor says it could not place this finger. That is a normal
+         * outcome, not a failure of the driver. */
+        syna_dbg("no match (interrupt type 0x%02x)", ilen ? ibuf[0] : 0);
+        out->matched = 0;
+        rc = SYNA_OK;
+        goto done;
+    }
+
+    rc = syna_vcsfw_call(d, results, sizeof results, &reply);
+    if (rc != SYNA_OK)
+        goto done;
+
+    if (reply.len < 4) {
+        rc = SYNA_ERR_PROTO;
+        goto done;
+    }
+    {
+        const uint8_t *body = reply.p + 4;
+        size_t blen = reply.len - 4;
+        uint16_t declared = (uint16_t)(reply.p[2] | (reply.p[3] << 8));
+        const uint8_t *v;
+        uint16_t vlen;
+
+        if (declared != blen) {
+            syna_dbg("match result length mismatch: %u declared, %zu present",
+                     declared, blen);
+            rc = SYNA_ERR_PROTO;
+            goto done;
+        }
+
+        v = dict_get(body, blen, 1, &vlen);
+        if (v && vlen >= 4)
+            out->user_id = (uint32_t)v[0] | ((uint32_t)v[1] << 8) |
+                           ((uint32_t)v[2] << 16) | ((uint32_t)v[3] << 24);
+
+        v = dict_get(body, blen, 3, &vlen);
+        if (v && vlen >= 2)
+            out->subtype = (uint16_t)(v[0] | (v[1] << 8));
+
+        v = dict_get(body, blen, 4, &vlen);
+        if (v && vlen == sizeof out->hash) {
+            memcpy(out->hash, v, sizeof out->hash);
+            out->have_hash = 1;
+        }
+        out->matched = 1;
+    }
+    rc = SYNA_OK;
+done:
+    {
+        syna_buf r = { 0 };
+        syna_vcsfw_cmd(d, release, sizeof release, &r);
+        syna_buf_free(&r);
+    }
+    syna_buf_free(&reply);
+    return rc;
+}
