@@ -308,15 +308,21 @@ static int append_new_image(syna_dev *d, syna_buf *template_,
 
         if (chunk > len) { rc = SYNA_ERR_PROTO; goto done; }
 
+        syna_dbg("enrol chunk: tag %u, length %u", tag, l);
+
         if (tag == 0) {
             template_->len = 0;
             if ((rc = syna_buf_add(template_, p, chunk)) != SYNA_OK) goto done;
         } else if (tag == 1 && progress) {
-            /* The header carries the sensor's own progress estimate. */
+            /* Not a percentage: a bitmask with one bit per enrolment stage
+             * the sensor has satisfied. */
             if (l >= 2)
                 *progress = rd16(p + ENROLL_MAGIC_LEN);
         } else if (tag == 3) {
             if ((rc = syna_buf_add(tid, p + ENROLL_MAGIC_LEN, l)) != SYNA_OK) goto done;
+            syna_dbg("sensor issued a template id (%u bytes): enrolment complete", l);
+        } else {
+            syna_dbg("ignoring unknown enrol chunk tag %u", tag);
         }
 
         p   += chunk;

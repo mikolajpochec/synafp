@@ -69,7 +69,11 @@ static int enroll_cb(syna_enroll_event ev, int touches, int progress, void *user
         printf("  touch the sensor%s\n", touches ? " again" : "");
         break;
     case SYNA_ENROLL_PROGRESS:
-        printf("  accepted (%d touches, sensor reports %d%%)\n", touches, progress);
+        /* The sensor's field is a bitmask with one bit per accepted sample,
+         * so it says nothing the touch count does not. It decides for itself
+         * when it has enough; there is no total to count towards. */
+        (void)progress;
+        printf("  accepted (%d sample%s)\n", touches, touches == 1 ? "" : "s");
         break;
     case SYNA_ENROLL_RETRY:
         printf("  that touch was not usable, try again\n");
