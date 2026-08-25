@@ -755,6 +755,21 @@ int syna_glow_end(syna_dev *d)
     return rc;
 }
 
+/* An operation aborted part way through - a killed client, a competing daemon
+ * being stopped - can leave interrupts queued. They would then be read as the
+ * response to the next capture and fail it, so discard anything stale first. */
+static void drain_interrupts(syna_dev *d)
+{
+    uint8_t buf[64];
+    int len = 0, i;
+
+    for (i = 0; i < 16; i++) {
+        if (syna_interrupt_read(d, buf, sizeof buf, &len, 50) != SYNA_OK)
+            return;
+        syna_dbg("discarded a stale interrupt (type 0x%02x)", len ? buf[0] : 0);
+    }
+}
+
 int syna_capture(syna_dev *d, syna_capture_mode mode, syna_capture_result *out)
 {
     static const uint8_t stop[] = { 0x04 };
@@ -775,13 +790,22 @@ int syna_capture(syna_dev *d, syna_capture_mode mode, syna_capture_result *out)
     if (rc != SYNA_OK)
         goto out;
 
-    /* start */
-    rc = syna_wait_interrupt(d, ibuf, sizeof ibuf, &ilen, 5000);
-    if (rc != SYNA_OK) goto stop_out;
-    if (ilen < 1 || ibuf[0] != 0) {
-        syna_dbg("unexpected interrupt at start: 0x%02x", ilen ? ibuf[0] : 0);
-        rc = SYNA_ERR_PROTO;
-        goto stop_out;
+    /* Wait for the start marker, stepping over anything left over. */
+    {
+        int tries;
+        for (tries = 0; tries < 8; tries++) {
+            rc = syna_wait_interrupt(d, ibuf, sizeof ibuf, &ilen, 5000);
+            if (rc != SYNA_OK) goto stop_out;
+            if (ilen >= 1 && ibuf[0] == 0)
+                break;
+            syna_dbg("skipping unexpected interrupt 0x%02x before start",
+                     ilen ? ibuf[0] : 0);
+        }
+        if (tries == 8) {
+            syna_dbg("no start marker after 8 interrupts");
+            rc = SYNA_ERR_PROTO;
+            goto stop_out;
+        }
     }
 
     /* wait for a finger */
