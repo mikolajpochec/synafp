@@ -245,34 +245,77 @@ static const sd_bus_vtable manager_vtable[] = {
     SD_BUS_VTABLE_END
 };
 
-static int prop_get(sd_bus *b, const char *path, const char *iface,
-                    const char *prop, sd_bus_message *reply, void *u,
-                    sd_bus_error *e)
+/* fprintd names its properties with hyphens - scan-type, num-enroll-stages -
+ * which D-Bus does not allow in member names and sd-bus refuses to put in a
+ * vtable. fprintd itself uses GDBus, which does not enforce that. So serve the
+ * Properties interface by hand, where the name is only ever a string argument.
+ */
+static int append_prop(sd_bus_message *reply, const char *prop)
 {
-    (void)b; (void)path; (void)iface; (void)u; (void)e;
-
     if (!strcmp(prop, "name"))
-        return sd_bus_message_append(reply, "s", "synafp");
+        return sd_bus_message_append(reply, "v", "s", "synafp");
     if (!strcmp(prop, "scan-type"))
-        return sd_bus_message_append(reply, "s", "press");
+        return sd_bus_message_append(reply, "v", "s", "press");
     if (!strcmp(prop, "num-enroll-stages"))
-        return sd_bus_message_append(reply, "i", 5);
+        return sd_bus_message_append(reply, "v", "i", 5);
     if (!strcmp(prop, "finger-present"))
-        return sd_bus_message_append(reply, "b", 0);
+        return sd_bus_message_append(reply, "v", "b", 0);
     if (!strcmp(prop, "finger-needed"))
-        return sd_bus_message_append(reply, "b", verify_pid > 0);
-    return sd_bus_error_set_const(e, SD_BUS_ERROR_UNKNOWN_PROPERTY, prop);
+        return sd_bus_message_append(reply, "v", "b", verify_pid > 0);
+    return -ENOENT;
+}
+
+static const char *const device_props[] = {
+    "name", "scan-type", "num-enroll-stages", "finger-present", "finger-needed"
+};
+
+static int device_properties(sd_bus_message *m, void *u, sd_bus_error *e)
+{
+    const char *iface = NULL, *prop = NULL;
+    sd_bus_message *reply = NULL;
+    size_t i;
+    int r;
+
+    (void)u;
+
+    if (sd_bus_message_is_method_call(m, "org.freedesktop.DBus.Properties", "Get")) {
+        r = sd_bus_message_read(m, "ss", &iface, &prop);
+        if (r < 0) return r;
+
+        r = sd_bus_message_new_method_return(m, &reply);
+        if (r < 0) return r;
+        r = append_prop(reply, prop);
+        if (r < 0)
+            return sd_bus_error_setf(e, SD_BUS_ERROR_UNKNOWN_PROPERTY,
+                                     "no such property %s", prop);
+        return sd_bus_send(NULL, reply, NULL);
+    }
+
+    if (sd_bus_message_is_method_call(m, "org.freedesktop.DBus.Properties", "GetAll")) {
+        r = sd_bus_message_new_method_return(m, &reply);
+        if (r < 0) return r;
+        r = sd_bus_message_open_container(reply, 'a', "{sv}");
+        if (r < 0) return r;
+        for (i = 0; i < sizeof device_props / sizeof device_props[0]; i++) {
+            r = sd_bus_message_open_container(reply, 'e', "sv");
+            if (r < 0) return r;
+            r = sd_bus_message_append(reply, "s", device_props[i]);
+            if (r < 0) return r;
+            r = append_prop(reply, device_props[i]);
+            if (r < 0) return r;
+            r = sd_bus_message_close_container(reply);
+            if (r < 0) return r;
+        }
+        r = sd_bus_message_close_container(reply);
+        if (r < 0) return r;
+        return sd_bus_send(NULL, reply, NULL);
+    }
+
+    return 0;   /* not ours: let the vtable handle it */
 }
 
 static const sd_bus_vtable device_vtable[] = {
     SD_BUS_VTABLE_START(0),
-    SD_BUS_PROPERTY("name", "s", prop_get, 0, SD_BUS_VTABLE_PROPERTY_CONST),
-    SD_BUS_PROPERTY("scan-type", "s", prop_get, 0, SD_BUS_VTABLE_PROPERTY_CONST),
-    SD_BUS_PROPERTY("num-enroll-stages", "i", prop_get, 0, SD_BUS_VTABLE_PROPERTY_CONST),
-    SD_BUS_PROPERTY("finger-present", "b", prop_get, 0,
-                    SD_BUS_VTABLE_PROPERTY_EMITS_CHANGE),
-    SD_BUS_PROPERTY("finger-needed", "b", prop_get, 0,
-                    SD_BUS_VTABLE_PROPERTY_EMITS_CHANGE),
     SD_BUS_METHOD("Claim", "s", "", method_claim, SD_BUS_VTABLE_UNPRIVILEGED),
     SD_BUS_METHOD("Release", "", "", method_release, SD_BUS_VTABLE_UNPRIVILEGED),
     SD_BUS_METHOD("VerifyStart", "s", "", method_verify_start,
@@ -311,6 +354,12 @@ int main(void)
     r = sd_bus_add_object_vtable(bus, NULL, DEVICE_PATH, DEVICE_IFACE,
                                  device_vtable, NULL);
     if (r < 0) { syslog(LOG_ERR, "device vtable: %s", strerror(-r)); return 1; }
+
+    /* Properties are a convenience for clients that ask; never a reason to
+     * refuse to start. */
+    r = sd_bus_add_object(bus, NULL, DEVICE_PATH, device_properties, NULL);
+    if (r < 0)
+        syslog(LOG_WARNING, "device properties unavailable: %s", strerror(-r));
 
     r = sd_bus_request_name(bus, "net.reactivated.Fprint", 0);
     if (r < 0) {
