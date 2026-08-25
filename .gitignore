@@ -1,9 +1,11 @@
-# build artefacts
+# build outputs
 *.o
 *.lo
+*.d
 *.so
 *.so.*
 /synafp
+/synafp-auth
 /pamtest
+/fuzzparse
 /synafp-test
-*.d
