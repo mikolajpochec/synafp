@@ -1,17 +1,28 @@
 # synafp - grant the logged-in user access to Synaptics match-on-chip
 # fingerprint sensors, so the driver does not need to run as root.
 #
-# uaccess hands the device to whoever is on the active local seat, which is
-# what systemd-logind based distros expect. The plugdev fallback covers
-# systems without logind.
+# TAG+="uaccess" is consumed by systemd's 73-seat-late.rules, which grants an
+# ACL to whoever holds the active local seat. This file therefore has to sort
+# before 73-; keep the 70- prefix if you rename it.
+#
+# Note the ACTION guard: it must not be ACTION=="add", because `udevadm
+# trigger` replays devices as "change" and the rule would never fire for a
+# sensor that was already plugged in at boot.
 #
 # Install to /usr/lib/udev/rules.d/ (or /etc/udev/rules.d/), then:
 #   udevadm control --reload-rules && udevadm trigger --subsystem-match=usb
 
+ACTION=="remove", GOTO="synafp_end"
 SUBSYSTEM!="usb", GOTO="synafp_end"
-ACTION!="add", GOTO="synafp_end"
+ENV{DEVTYPE}!="usb_device", GOTO="synafp_end"
 
-ATTR{idVendor}=="06cb", ATTR{bDeviceClass}=="ff", TAG+="uaccess", \
-    MODE="0660", GROUP="plugdev", ENV{ID_FINGERPRINT_READER}="1"
+ATTR{idVendor}=="06cb", ATTR{bDeviceClass}=="ff", \
+    TAG+="uaccess", ENV{ID_FINGERPRINT_READER}="1"
+
+# Fallback for systems without systemd-logind, where uaccess grants nothing.
+# Uncomment, and make sure the group exists and you are in it. Many
+# distributions (Arch among them) do not ship a plugdev group at all, which is
+# why this is not enabled by default.
+#ATTR{idVendor}=="06cb", ATTR{bDeviceClass}=="ff", MODE="0660", GROUP="plugdev"
 
 LABEL="synafp_end"
