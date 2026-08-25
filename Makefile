@@ -102,8 +102,12 @@ install: all
 	install -d $(DESTDIR)$(DATADIR)/synafp
 	install -m 0644 dist/synafp-pam-example $(DESTDIR)$(DATADIR)/synafp/pam-example
 	@echo
-	@echo "Installed. Reload udev and replug/rescan the sensor:"
-	@echo "  udevadm control --reload-rules && udevadm trigger --subsystem-match=usb"
+	@echo "Installed. Reload udev (note: sudo on BOTH commands):"
+	@echo "  sudo udevadm control --reload-rules"
+	@echo "  sudo udevadm trigger --subsystem-match=usb"
+	@echo
+	@echo "Then wire it into login and the screen locker:"
+	@echo "  sudo ./dist/enable-pam.sh"
 
 uninstall:
 	rm -f $(DESTDIR)$(BINDIR)/synafp
