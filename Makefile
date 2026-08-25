@@ -33,7 +33,7 @@ ALL_CFLAGS  := -std=c99 $(WARN) $(CFLAGS) $(USB_CFLAGS) $(SSL_CFLAGS) -Isrc -MMD
 LDLIBS      := $(USB_LIBS) $(SSL_LIBS)
 
 LIB_SRC     := src/synafp_core.c src/synafp_vcsfw.c src/synafp_tls.c \
-               src/synafp_capture.c src/synafp_tables.c
+               src/synafp_capture.c src/synafp_tables.c src/synafp_db.c
 LIB_OBJ     := $(LIB_SRC:.c=.o)
 LIB_PIC     := $(LIB_SRC:.c=.lo)
 

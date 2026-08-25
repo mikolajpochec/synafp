@@ -55,6 +55,12 @@ extern "C" {
 #define VCSFW_CMD_FW_INFO       0x43
 #define VCSFW_CMD_TLS_DATA      0x44
 #define VCSFW_CMD_IDENTIFY      0x75
+#define VCSFW_CMD_DB_INFO       0x45
+#define VCSFW_CMD_DB_CHILDREN   0x46
+#define VCSFW_CMD_DB_DELETE     0x48
+#define VCSFW_CMD_DB_VALUE      0x49
+#define VCSFW_CMD_DB_USER       0x4a
+#define VCSFW_CMD_DB_STORAGE    0x4b
 #define VCSFW_CMD_FACTORY_BITS  0x6f
 
 #define SYNA_TLS_PARTITION      1
@@ -171,6 +177,26 @@ typedef struct {
 } syna_match_result;
 
 int syna_match(syna_dev *d, syna_match_result *out);
+
+/* --- on-sensor template database ---------------------------------------- */
+typedef struct {
+    uint32_t total, used, free;
+    uint16_t records;
+    int      n_roots;
+    uint16_t roots[8];
+} syna_db_info_t;
+
+typedef struct {
+    uint16_t dbid, type, storage;
+    int      n_children;
+    struct { uint16_t dbid, type; } children[64];
+} syna_db_record;
+
+int syna_db_info(syna_dev *d, syna_db_info_t *out);
+int syna_db_children(syna_dev *d, uint16_t dbid, syna_db_record *out);
+int syna_db_dump(syna_dev *d, FILE *out);
+const char *syna_record_type_name(uint16_t type);
+const char *syna_subtype_name(uint16_t subtype);
 int syna_sensor_setup(syna_dev *d);
 int syna_dump_capture_program(syna_dev *d, syna_capture_mode mode, FILE *out);
 int syna_capture(syna_dev *d, syna_capture_mode mode, syna_capture_result *out);

@@ -25,6 +25,7 @@ static void usage(FILE *f)
 "  glow        exercise the sensor LED only\n"
 "  progdump    print the capture program without sending it\n"
 "  identify    scan a finger and match it against the sensor database\n"
+"  db          list what is enrolled on the sensor\n"
 "\n"
 "Options:\n"
 "  -s <serial>   select a specific sensor\n"
@@ -229,6 +230,13 @@ int main(int argc, char **argv)
                     ret = 2;
                 }
             }
+        }
+
+    } else if (!strcmp(cmd, "db")) {
+        rc = syna_db_dump(d, stdout);
+        if (rc != SYNA_OK) {
+            fprintf(stderr, "synafp: %s\n", syna_strerror(rc));
+            ret = 1;
         }
 
     } else if (!strcmp(cmd, "session")) {

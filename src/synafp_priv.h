@@ -105,6 +105,8 @@ struct syna_dev {
     syna_buf              calib_data;     /* per-line calibration, may be empty */
 };
 
+int syna_db_value(syna_dev *d, uint16_t dbid, uint16_t *type, syna_buf *out);
+
 /* capture internals */
 int syna_build_capture_program(syna_dev *d, syna_capture_mode mode, syna_buf *out);
 int syna_interrupt_read(syna_dev *d, uint8_t *buf, int cap, int *len, unsigned timeout_ms);
