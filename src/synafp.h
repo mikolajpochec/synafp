@@ -61,6 +61,10 @@ extern "C" {
 #define VCSFW_CMD_DB_VALUE      0x49
 #define VCSFW_CMD_DB_USER       0x4a
 #define VCSFW_CMD_DB_STORAGE    0x4b
+#define VCSFW_CMD_DB_NEW_RECORD 0x47
+#define VCSFW_CMD_ENROLL_UPDATE_START 0x68
+#define VCSFW_CMD_ENROLL_CTL          0x69
+#define VCSFW_CMD_ENROLL_UPDATE       0x6b
 #define VCSFW_CMD_FACTORY_BITS  0x6f
 
 #define SYNA_TLS_PARTITION      1
@@ -85,6 +89,7 @@ extern "C" {
 #define SYNA_ERR_BUSY          -9
 #define SYNA_ERR_UNSUPPORTED  -10
 #define SYNA_ERR_PAIRING      -11   /* sensor is paired to a different machine */
+#define SYNA_ERR_NOT_FOUND    -12
 #define SYNA_ERR_SENSOR_BASE   100000
 
 #define SYNA_IS_SENSOR_ERR(r)  ((r) <= -SYNA_ERR_SENSOR_BASE)
@@ -197,6 +202,21 @@ int syna_db_children(syna_dev *d, uint16_t dbid, syna_db_record *out);
 int syna_db_dump(syna_dev *d, FILE *out);
 const char *syna_record_type_name(uint16_t type);
 const char *syna_subtype_name(uint16_t subtype);
+int syna_subtype_from_name(const char *name);
+
+/* --- enrolment ----------------------------------------------------------- */
+typedef enum {
+    SYNA_ENROLL_TOUCH = 0,   /* sensor is armed, asking for a touch */
+    SYNA_ENROLL_PROGRESS,    /* a touch was accepted */
+    SYNA_ENROLL_RETRY        /* that touch was unusable */
+} syna_enroll_event;
+
+/* Return non-zero to abandon the enrolment. */
+typedef int (*syna_enroll_cb)(syna_enroll_event ev, int touches, int progress, void *user);
+
+int syna_enroll(syna_dev *d, const char *username, uint16_t subtype,
+                syna_enroll_cb cb, void *user);
+int syna_db_user_storage(syna_dev *d, const char *name, uint16_t *dbid);
 int syna_sensor_setup(syna_dev *d);
 int syna_dump_capture_program(syna_dev *d, syna_capture_mode mode, FILE *out);
 int syna_capture(syna_dev *d, syna_capture_mode mode, syna_capture_result *out);

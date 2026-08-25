@@ -8,6 +8,54 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <pwd.h>
+#include <signal.h>
+
+static syna_dev *g_dev;
+static volatile sig_atomic_t g_interrupted;
+
+static void on_sigint(int sig)
+{
+    (void)sig;
+    g_interrupted = 1;
+    if (g_dev)
+        syna_cancel(g_dev);
+}
+
+static const char *current_user(void)
+{
+    struct passwd *pw;
+    const char *s;
+
+    /* The driver needs root, so it is normally reached through sudo. Enrol
+     * for the person who invoked it, not for root. */
+    s = getenv("SUDO_USER");
+    if (s && *s)
+        return s;
+
+    pw = getpwuid(getuid());
+    return (pw && pw->pw_name) ? pw->pw_name : "user";
+}
+
+static int enroll_cb(syna_enroll_event ev, int touches, int progress, void *user)
+{
+    (void)user;
+    if (g_interrupted)
+        return 1;
+    switch (ev) {
+    case SYNA_ENROLL_TOUCH:
+        printf("  touch the sensor%s\n", touches ? " again" : "");
+        break;
+    case SYNA_ENROLL_PROGRESS:
+        printf("  accepted (%d touches, sensor reports %d%%)\n", touches, progress);
+        break;
+    case SYNA_ENROLL_RETRY:
+        printf("  that touch was not usable, try again\n");
+        break;
+    }
+    fflush(stdout);
+    return 0;
+}
 
 static void usage(FILE *f)
 {
@@ -26,9 +74,13 @@ static void usage(FILE *f)
 "  progdump    print the capture program without sending it\n"
 "  identify    scan a finger and match it against the sensor database\n"
 "  db          list what is enrolled on the sensor\n"
+"  enroll <finger>  record a finger for this user\n"
+"\n"
+"Finger names: left/right- thumb, index, middle, ring, little\n"
 "\n"
 "Options:\n"
 "  -s <serial>   select a specific sensor\n"
+"  -u <user>     act on this user (default: the caller)\n"
 "  -r            USB-reset the sensor first\n"
 "  -n            skip the TLS handshake\n"
 "  -v            protocol tracing (repeat for hex dumps)\n"
@@ -46,7 +98,7 @@ static const char *access_desc(uint16_t lvl)
 
 int main(int argc, char **argv)
 {
-    const char *serial = NULL, *cmd;
+    const char *serial = NULL, *cmd, *user = NULL;
     unsigned flags = 0;
     int verbose = 0, i, rc, ret = 0;
     syna_dev *d = NULL;
@@ -59,6 +111,7 @@ int main(int argc, char **argv)
         else if (!strcmp(a, "-r")) flags |= SYNA_OPEN_RESET;
         else if (!strcmp(a, "-n")) flags |= SYNA_OPEN_NO_TLS;
         else if (!strcmp(a, "-s") && i + 1 < argc) serial = argv[++i];
+        else if (!strcmp(a, "-u") && i + 1 < argc) user = argv[++i];
         else {
             /* allow clustered -v flags such as -vv */
             const char *q = a + 1;
@@ -77,6 +130,14 @@ int main(int argc, char **argv)
     if (verbose)
         syna_set_debug(verbose);
 
+    {
+        struct sigaction sa;
+        memset(&sa, 0, sizeof sa);
+        sa.sa_handler = on_sigint;
+        sigaction(SIGINT, &sa, NULL);
+        sigaction(SIGTERM, &sa, NULL);
+    }
+
     rc = syna_open(&d, serial, flags);
     if (rc != SYNA_OK) {
         fprintf(stderr, "synafp: %s\n", syna_strerror(rc));
@@ -91,7 +152,30 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    if (!strcmp(cmd, "info")) {
+    g_dev = d;
+
+    if (!strcmp(cmd, "enroll")) {
+        int subtype;
+        const char *who = user ? user : current_user();
+
+        if (i + 1 >= argc) {
+            fprintf(stderr, "synafp: enroll needs a finger name, e.g. right-index\n");
+            ret = 1;
+        } else if ((subtype = syna_subtype_from_name(argv[i + 1])) < 0) {
+            fprintf(stderr, "synafp: '%s' is not a finger name\n", argv[i + 1]);
+            ret = 1;
+        } else {
+            printf("Enrolling %s for '%s'.\n", argv[i + 1], who);
+            rc = syna_enroll(d, who, (uint16_t)subtype, enroll_cb, NULL);
+            if (rc == SYNA_OK) {
+                printf("Enrolment complete.\n");
+            } else {
+                fprintf(stderr, "synafp: enrolment failed: %s\n", syna_strerror(rc));
+                ret = 1;
+            }
+        }
+
+    } else if (!strcmp(cmd, "info")) {
         printf("Sensor        : %04x (serial %s)\n", syna_product_id(d), syna_serial(d));
 
         if (syna_fw_version_get(d, &fw) == SYNA_OK) {

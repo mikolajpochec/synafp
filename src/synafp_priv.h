@@ -106,6 +106,11 @@ struct syna_dev {
 };
 
 int syna_db_value(syna_dev *d, uint16_t dbid, uint16_t *type, syna_buf *out);
+int syna_db_lookup_user(syna_dev *d, uint16_t storage, const uint8_t *ident,
+                        size_t ident_len, uint16_t *dbid);
+int syna_db_new_record(syna_dev *d, uint16_t parent, uint16_t type, uint16_t storage,
+                       const uint8_t *data, size_t len, uint16_t *recid);
+int syna_identity_for_user(const char *username, syna_buf *out);
 
 /* capture internals */
 int syna_build_capture_program(syna_dev *d, syna_capture_mode mode, syna_buf *out);

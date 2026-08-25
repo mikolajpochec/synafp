@@ -52,6 +52,7 @@ const char *syna_strerror(int rc)
         case 0x0403: s = "command not allowed outside a secure session"; break;
         case 0x0491: s = "nothing to commit"; break;
         case 0x04b0: s = "no firmware extension loaded"; break;
+        case 0x04b3: s = "no such record"; break;
         }
         if (s)
             snprintf(buf, sizeof buf, "%s (sensor status 0x%04x)", s, st);
@@ -73,6 +74,7 @@ const char *syna_strerror(int rc)
     case SYNA_ERR_BUSY:        return "device is claimed by another process";
     case SYNA_ERR_UNSUPPORTED: return "operation not supported by this sensor";
     case SYNA_ERR_PAIRING:     return "sensor is paired to a different computer";
+    case SYNA_ERR_NOT_FOUND:   return "no such record on the sensor";
     }
     snprintf(buf, sizeof buf, "unknown error %d", rc);
     return buf;
