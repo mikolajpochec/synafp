@@ -19,8 +19,9 @@ ReadWritePaths=/var/lib/synafp
 PrivateTmp=yes
 ProtectKernelTunables=yes
 ProtectControlGroups=yes
-RestrictAddressFamilies=AF_UNIX
-MemoryDenyWriteExecute=yes
+# libusb enumerates through udev, which needs a netlink socket. Without
+# AF_NETLINK libusb_init() fails outright and every scan reports a USB error.
+RestrictAddressFamilies=AF_UNIX AF_NETLINK
 
 [Install]
 WantedBy=multi-user.target

@@ -90,6 +90,7 @@ extern "C" {
 #define SYNA_ERR_UNSUPPORTED  -10
 #define SYNA_ERR_PAIRING      -11   /* sensor is paired to a different machine */
 #define SYNA_ERR_NOT_FOUND    -12
+#define SYNA_ERR_USB_INIT     -13
 #define SYNA_ERR_SENSOR_BASE   100000
 
 #define SYNA_IS_SENSOR_ERR(r)  ((r) <= -SYNA_ERR_SENSOR_BASE)

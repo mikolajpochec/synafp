@@ -80,6 +80,8 @@ const char *syna_strerror(int rc)
     case SYNA_ERR_UNSUPPORTED: return "operation not supported by this sensor";
     case SYNA_ERR_PAIRING:     return "sensor is paired to a different computer";
     case SYNA_ERR_NOT_FOUND:   return "no such record on the sensor";
+    case SYNA_ERR_USB_INIT:    return "libusb could not start (a sandbox may be "
+                                      "blocking netlink, which udev needs)";
     }
     snprintf(buf, sizeof buf, "unknown error %d", rc);
     return buf;
@@ -397,9 +399,10 @@ int syna_open(syna_dev **out, const char *serial, unsigned flags)
 
     rc = libusb_init(&d->ctx);
     if (rc != 0) {
+        syna_dbg("libusb_init failed: %s", libusb_strerror(rc));
         free(d->rx);
         free(d);
-        return syna_usb_error(rc);
+        return SYNA_ERR_USB_INIT;
     }
 
     rc = usb_bring_up(d, serial);
