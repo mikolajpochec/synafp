@@ -781,6 +781,8 @@ int syna_capture(syna_dev *d, syna_capture_mode mode, syna_capture_result *out)
     if (!d->type_info && (rc = syna_sensor_setup(d)) != SYNA_OK)
         return rc;
 
+    drain_interrupts(d);
+
     rc = syna_build_capture_program(d, mode, &cmd);
     if (rc != SYNA_OK)
         goto out;
