@@ -13,6 +13,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
+#include <sys/types.h>
 
 const syna_type_info *syna_type_lookup(uint16_t sensor_type)
 {
@@ -627,6 +629,10 @@ int syna_sensor_setup(syna_dev *d)
     d->key_calibration_line = 0x38;
     d->lines_per_frame = 0;
 
+    if (!d->calib_data.len &&
+        syna_load_calibration(d, SYNA_CALIB_DEFAULT_PATH) != SYNA_OK)
+        syna_dbg("no calibration data at %s", SYNA_CALIB_DEFAULT_PATH);
+
     rc = get_factory_bits(d, 0x0e00, 3, &d->factory_calib);
     if (rc != SYNA_OK) {
         syna_dbg("cannot read factory calibration values: %s", syna_strerror(rc));
@@ -940,4 +946,86 @@ done:
     }
     syna_buf_free(&reply);
     return rc;
+}
+
+/* --------------------------------------------------------------------------
+ * Calibration data
+ *
+ * Per-line calibration is host-side state: the sensor keeps a reference image
+ * in flash, but the per-line correction table lives here. Without it the key
+ * line is written as zeros and finger detection does not work.
+ * ----------------------------------------------------------------------- */
+int syna_load_calibration(syna_dev *d, const char *path)
+{
+    FILE *f;
+    long n;
+    uint8_t *buf;
+    int rc;
+
+    if (!d || !path)
+        return SYNA_ERR_INVAL;
+
+    f = fopen(path, "rb");
+    if (!f)
+        return SYNA_ERR_NOT_FOUND;
+
+    if (fseek(f, 0, SEEK_END) != 0 || (n = ftell(f)) <= 0 || fseek(f, 0, SEEK_SET) != 0) {
+        fclose(f);
+        return SYNA_ERR_PROTO;
+    }
+
+    buf = malloc((size_t)n);
+    if (!buf) {
+        fclose(f);
+        return SYNA_ERR_NOMEM;
+    }
+    if (fread(buf, 1, (size_t)n, f) != (size_t)n) {
+        free(buf);
+        fclose(f);
+        return SYNA_ERR_PROTO;
+    }
+    fclose(f);
+
+    d->calib_data.len = 0;
+    rc = syna_buf_add(&d->calib_data, buf, (size_t)n);
+    free(buf);
+    if (rc != SYNA_OK)
+        return rc;
+
+    syna_dbg("loaded %ld bytes of calibration data from %s", n, path);
+    return SYNA_OK;
+}
+
+int syna_save_calibration(syna_dev *d, const char *path)
+{
+    FILE *f;
+    char dir[512];
+    char *slash;
+
+    if (!d || !path || !d->calib_data.len)
+        return SYNA_ERR_INVAL;
+
+    /* Create the containing directory if we can; fopen reports the real
+     * problem if this is not enough. */
+    snprintf(dir, sizeof dir, "%s", path);
+    slash = strrchr(dir, '/');
+    if (slash && slash != dir) {
+        *slash = '\0';
+        mkdir(dir, 0755);
+    }
+
+    f = fopen(path, "wb");
+    if (!f)
+        return SYNA_ERR_ACCESS;
+    if (fwrite(d->calib_data.p, 1, d->calib_data.len, f) != d->calib_data.len) {
+        fclose(f);
+        return SYNA_ERR_PROTO;
+    }
+    fclose(f);
+    return SYNA_OK;
+}
+
+int syna_have_calibration(const syna_dev *d)
+{
+    return d && d->calib_data.len > 0;
 }

@@ -75,12 +75,14 @@ static void usage(FILE *f)
 "  identify    scan a finger and match it against the sensor database\n"
 "  db          list what is enrolled on the sensor\n"
 "  enroll <finger>  record a finger for this user\n"
+"  calib-import <file>  install per-line calibration data\n"
 "\n"
 "Finger names: left/right- thumb, index, middle, ring, little\n"
 "\n"
 "Options:\n"
 "  -s <serial>   select a specific sensor\n"
 "  -u <user>     act on this user (default: the caller)\n"
+"  -c <file>     load per-line calibration data from this file\n"
 "  -r            USB-reset the sensor first\n"
 "  -n            skip the TLS handshake\n"
 "  -v            protocol tracing (repeat for hex dumps)\n"
@@ -98,7 +100,7 @@ static const char *access_desc(uint16_t lvl)
 
 int main(int argc, char **argv)
 {
-    const char *serial = NULL, *cmd, *user = NULL;
+    const char *serial = NULL, *cmd, *user = NULL, *calib = NULL;
     unsigned flags = 0;
     int verbose = 0, i, rc, ret = 0;
     syna_dev *d = NULL;
@@ -112,6 +114,7 @@ int main(int argc, char **argv)
         else if (!strcmp(a, "-n")) flags |= SYNA_OPEN_NO_TLS;
         else if (!strcmp(a, "-s") && i + 1 < argc) serial = argv[++i];
         else if (!strcmp(a, "-u") && i + 1 < argc) user = argv[++i];
+        else if (!strcmp(a, "-c") && i + 1 < argc) calib = argv[++i];
         else {
             /* allow clustered -v flags such as -vv */
             const char *q = a + 1;
@@ -154,7 +157,32 @@ int main(int argc, char **argv)
 
     g_dev = d;
 
-    if (!strcmp(cmd, "enroll")) {
+    if (calib) {
+        rc = syna_load_calibration(d, calib);
+        if (rc != SYNA_OK) {
+            fprintf(stderr, "synafp: cannot load calibration from %s: %s\n",
+                    calib, syna_strerror(rc));
+            syna_close(d);
+            return 1;
+        }
+    }
+
+    if (!strcmp(cmd, "calib-import")) {
+        if (i + 1 >= argc) {
+            fprintf(stderr, "synafp: calib-import needs a file\n");
+            ret = 1;
+        } else if ((rc = syna_load_calibration(d, argv[i + 1])) != SYNA_OK) {
+            fprintf(stderr, "synafp: cannot read %s: %s\n", argv[i + 1], syna_strerror(rc));
+            ret = 1;
+        } else if ((rc = syna_save_calibration(d, SYNA_CALIB_DEFAULT_PATH)) != SYNA_OK) {
+            fprintf(stderr, "synafp: cannot write %s: %s\n",
+                    SYNA_CALIB_DEFAULT_PATH, syna_strerror(rc));
+            ret = 1;
+        } else {
+            printf("Calibration installed at %s\n", SYNA_CALIB_DEFAULT_PATH);
+        }
+
+    } else if (!strcmp(cmd, "enroll")) {
         int subtype;
         const char *who = user ? user : current_user();
 

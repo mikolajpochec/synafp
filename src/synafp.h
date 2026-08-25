@@ -217,6 +217,11 @@ typedef int (*syna_enroll_cb)(syna_enroll_event ev, int touches, int progress, v
 int syna_enroll(syna_dev *d, const char *username, uint16_t subtype,
                 syna_enroll_cb cb, void *user);
 int syna_db_user_storage(syna_dev *d, const char *name, uint16_t *dbid);
+#define SYNA_CALIB_DEFAULT_PATH "/var/lib/synafp/calib-data.bin"
+
+int syna_load_calibration(syna_dev *d, const char *path);
+int syna_save_calibration(syna_dev *d, const char *path);
+int syna_have_calibration(const syna_dev *d);
 int syna_sensor_setup(syna_dev *d);
 int syna_dump_capture_program(syna_dev *d, syna_capture_mode mode, FILE *out);
 int syna_capture(syna_dev *d, syna_capture_mode mode, syna_capture_result *out);
