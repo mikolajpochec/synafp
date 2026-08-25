@@ -338,3 +338,63 @@ int syna_read_flash_all(syna_dev *d, uint8_t partition, uint32_t start, uint32_t
         out->len = size;
     return rc;
 }
+
+/* --------------------------------------------------------------------------
+ * Initialisation
+ *
+ * The sensor comes up in a state where it answers queries but rejects capture
+ * programs, taking the firmware down with it. These blobs, captured from the
+ * vendor driver, put it into a working state. They must be sent before the
+ * TLS handshake, on the plain command path.
+ * ----------------------------------------------------------------------- */
+const syna_dev_blobs *syna_blobs_lookup(uint16_t vid, uint16_t pid)
+{
+    int i;
+    for (i = 0; i < syna_blob_table_len; i++)
+        if (syna_blob_table[i].vid == vid && syna_blob_table[i].pid == pid)
+            return &syna_blob_table[i];
+    return NULL;
+}
+
+int syna_send_init(syna_dev *d)
+{
+    const syna_dev_blobs *b = syna_blobs_lookup(d->vid, d->pid);
+    syna_buf reply = { 0 };
+    uint8_t cmd[2];
+    uint16_t fw_status = 0;
+    int rc;
+
+    if (!b) {
+        syna_dbg("no initialisation blobs for %04x:%04x", d->vid, d->pid);
+        return SYNA_ERR_UNSUPPORTED;
+    }
+
+    cmd[0] = VCSFW_CMD_GET_VERSION;
+    if ((rc = syna_vcsfw_call(d, cmd, 1, &reply)) != SYNA_OK) goto done;
+
+    cmd[0] = VCSFW_CMD_GET_STATUS;
+    if ((rc = syna_vcsfw_call(d, cmd, 1, &reply)) != SYNA_OK) goto done;
+
+    /* Ask about the firmware extension partition. A non-zero status here is
+     * not an error: it just means no extension has been loaded yet. */
+    cmd[0] = VCSFW_CMD_FW_INFO;
+    cmd[1] = 2;
+    if ((rc = syna_vcsfw_cmd(d, cmd, 2, &reply)) != SYNA_OK) goto done;
+    if (reply.len >= 2)
+        fw_status = (uint16_t)(reply.p[0] | (reply.p[1] << 8));
+
+    rc = syna_vcsfw_call(d, b->init_hardcoded, b->init_hardcoded_len, &reply);
+    if (rc != SYNA_OK) goto done;
+
+    if (fw_status != 0) {
+        syna_dbg("no firmware extension present, sending clean slate init");
+        rc = syna_vcsfw_call(d, b->init_clean_slate, b->init_clean_slate_len, &reply);
+        if (rc != SYNA_OK) goto done;
+    }
+
+    syna_dbg("sensor initialised (fwext status 0x%04x)", fw_status);
+    rc = SYNA_OK;
+done:
+    syna_buf_free(&reply);
+    return rc;
+}

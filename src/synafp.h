@@ -150,6 +150,24 @@ typedef struct {
     uint16_t           length;
 } syna_calib_info;
 
+typedef enum {
+    SYNA_CAPTURE_CALIBRATE = 1,
+    SYNA_CAPTURE_IDENTIFY  = 2,
+    SYNA_CAPTURE_ENROLL    = 3
+} syna_capture_mode;
+
+/* Where on the sensor the finger landed, and how wide the ridges were. */
+typedef struct {
+    uint16_t x, y, w1, w2;
+} syna_capture_result;
+
+int syna_sensor_setup(syna_dev *d);
+int syna_dump_capture_program(syna_dev *d, syna_capture_mode mode, FILE *out);
+int syna_capture(syna_dev *d, syna_capture_mode mode, syna_capture_result *out);
+int syna_glow_start(syna_dev *d);
+int syna_glow_end(syna_dev *d);
+int syna_cancel(syna_dev *d);
+
 int syna_identify_sensor(syna_dev *d, uint16_t *major, uint16_t *minor);
 int syna_calib_state(syna_dev *d, syna_calib_info *out);
 

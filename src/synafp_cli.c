@@ -21,6 +21,9 @@ static void usage(FILE *f)
 "  session     open a secure session and report whether it succeeded\n"
 "  creds       inspect the credential store in the sensor's flash\n"
 "  sensor      sensor model and calibration state\n"
+"  capture     run one scan and report where the finger landed\n"
+"  glow        exercise the sensor LED only\n"
+"  progdump    print the capture program without sending it\n"
 "\n"
 "Options:\n"
 "  -s <serial>   select a specific sensor\n"
@@ -149,6 +152,47 @@ int main(int argc, char **argv)
             printf("Calibration   : unavailable (%s)\n", syna_strerror(rc));
         }
         rc = SYNA_OK;
+
+    } else if (!strcmp(cmd, "capture")) {
+        syna_capture_result r;
+
+        rc = syna_sensor_setup(d);
+        if (rc != SYNA_OK) {
+            fprintf(stderr, "synafp: sensor setup failed: %s\n", syna_strerror(rc));
+            ret = 1;
+        } else {
+            rc = syna_glow_start(d);
+            if (rc != SYNA_OK)
+                fprintf(stderr, "synafp: glow_start: %s\n", syna_strerror(rc));
+            printf("Place your finger on the sensor...\n");
+            fflush(stdout);
+
+            rc = syna_capture(d, SYNA_CAPTURE_IDENTIFY, &r);
+            syna_glow_end(d);
+
+            if (rc == SYNA_OK) {
+                printf("Captured: x=%u y=%u w1=%u w2=%u\n", r.x, r.y, r.w1, r.w2);
+            } else {
+                fprintf(stderr, "synafp: capture failed: %s\n", syna_strerror(rc));
+                ret = 1;
+            }
+        }
+
+    } else if (!strcmp(cmd, "glow")) {
+        rc = syna_glow_start(d);
+        printf("glow_start : %s\n", rc == SYNA_OK ? "ok" : syna_strerror(rc));
+        if (rc == SYNA_OK) {
+            rc = syna_glow_end(d);
+            printf("glow_end   : %s\n", rc == SYNA_OK ? "ok" : syna_strerror(rc));
+        }
+        ret = (rc == SYNA_OK) ? 0 : 1;
+
+    } else if (!strcmp(cmd, "progdump")) {
+        rc = syna_dump_capture_program(d, SYNA_CAPTURE_IDENTIFY, stdout);
+        if (rc != SYNA_OK) {
+            fprintf(stderr, "synafp: %s\n", syna_strerror(rc));
+            ret = 1;
+        }
 
     } else if (!strcmp(cmd, "session")) {
         if (syna_has_session(d)) {

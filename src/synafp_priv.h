@@ -49,6 +49,39 @@ typedef struct {
     int      secure_tx, secure_rx;
 } syna_tls;
 
+/* Per-sensor-type geometry and its capture program (see src/synafp_tables.c). */
+typedef struct {
+    uint16_t       sensor_type;
+    int            bytes_per_line;
+    int            line_width;
+    int            repeat_multiplier;
+    int            lines_per_calibration_data;
+    const uint8_t *prog;
+    size_t         prog_len;
+    const uint8_t *calib_blob;
+    size_t         calib_blob_len;
+} syna_type_info;
+
+/* Initialisation blobs, per device (see src/synafp_tables.c). */
+typedef struct {
+    uint16_t       vid, pid;
+    const uint8_t *init_hardcoded;
+    size_t         init_hardcoded_len;
+    const uint8_t *init_clean_slate;
+    size_t         init_clean_slate_len;
+    const uint8_t *db_write_enable;
+    size_t         db_write_enable_len;
+} syna_dev_blobs;
+
+extern const syna_dev_blobs syna_blob_table[];
+extern const int syna_blob_table_len;
+const syna_dev_blobs *syna_blobs_lookup(uint16_t vid, uint16_t pid);
+int syna_send_init(syna_dev *d);
+
+extern const syna_type_info syna_type_table[];
+extern const int syna_type_table_len;
+const syna_type_info *syna_type_lookup(uint16_t sensor_type);
+
 struct syna_dev {
     libusb_context       *ctx;
     libusb_device_handle *h;
@@ -62,7 +95,20 @@ struct syna_dev {
     uint8_t              *rx;        /* scratch for bulk reads */
     syna_fw_version       fw;
     syna_tls              tls;
+
+    /* capture state, filled in by syna_sensor_setup() */
+    const syna_type_info *type_info;
+    uint16_t              sensor_type;
+    int                   key_calibration_line;
+    int                   lines_per_frame;
+    syna_buf              factory_calib;  /* factory calibration values */
+    syna_buf              calib_data;     /* per-line calibration, may be empty */
 };
+
+/* capture internals */
+int syna_build_capture_program(syna_dev *d, syna_capture_mode mode, syna_buf *out);
+int syna_interrupt_read(syna_dev *d, uint8_t *buf, int cap, int *len, unsigned timeout_ms);
+int syna_wait_interrupt(syna_dev *d, uint8_t *buf, int cap, int *len, unsigned overall_ms);
 
 /* core */
 extern int syna_debug_level;

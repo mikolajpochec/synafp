@@ -417,6 +417,14 @@ int syna_open(syna_dev **out, const char *serial, unsigned flags)
     syna_dbg("firmware %u.%u build %u, security 0x%04x",
              d->fw.version_major, d->fw.version_minor, d->fw.build_num, d->fw.security);
 
+    /* Must happen before the handshake: an uninitialised sensor accepts the
+     * TLS session but crashes on the first capture program. */
+    rc = syna_send_init(d);
+    if (rc != SYNA_OK) {
+        syna_dbg("initialisation failed: %s", syna_strerror(rc));
+        goto fail;
+    }
+
     if (!(flags & SYNA_OPEN_NO_TLS)) {
         rc = establish_session(d);
         if (rc != SYNA_OK)
@@ -436,10 +444,20 @@ fail:
     return rc;
 }
 
+int syna_cancel(syna_dev *d)
+{
+    if (!d)
+        return SYNA_ERR_INVAL;
+    d->cancel_req = 1;
+    return SYNA_OK;
+}
+
 void syna_close(syna_dev *d)
 {
     if (!d)
         return;
+    syna_buf_free(&d->factory_calib);
+    syna_buf_free(&d->calib_data);
     syna_tls_free(&d->tls);
     usb_tear_down(d);
     if (d->ctx)
