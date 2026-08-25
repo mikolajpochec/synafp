@@ -223,6 +223,7 @@ int syna_db_del_record(syna_dev *d, uint16_t dbid);
 int syna_delete(syna_dev *d, const char *username, int subtype, int *removed);
 const char *syna_record_type_name(uint16_t type);
 const char *syna_subtype_name(uint16_t subtype);
+const char *syna_subtype_fprintd_name(uint16_t subtype);
 int syna_subtype_from_name(const char *name);
 
 /* --- enrolment ----------------------------------------------------------- */

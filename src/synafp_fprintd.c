@@ -223,13 +223,13 @@ static int method_list_enrolled(sd_bus_message *m, void *u, sd_bus_error *e)
             syna_db_get_user(d, userid, &ui) == SYNA_OK) {
             for (i = 0; i < ui.n_fingers; i++) {
                 sd_bus_message_append(reply, "s",
-                                      syna_subtype_name(ui.fingers[i].subtype));
+                                      syna_subtype_fprintd_name(ui.fingers[i].subtype));
                 listed++;
             }
         }
         syna_close(d);
     }
-    syslog(LOG_DEBUG, "ListEnrolledFingers('%s') -> %d", who ? who : "", listed);
+    syslog(LOG_INFO, "ListEnrolledFingers('%s') -> %d finger(s)", who ? who : "", listed);
 
     r = sd_bus_message_close_container(reply);
     if (r < 0) return r;
@@ -245,8 +245,34 @@ static const sd_bus_vtable manager_vtable[] = {
     SD_BUS_VTABLE_END
 };
 
+static int prop_get(sd_bus *b, const char *path, const char *iface,
+                    const char *prop, sd_bus_message *reply, void *u,
+                    sd_bus_error *e)
+{
+    (void)b; (void)path; (void)iface; (void)u; (void)e;
+
+    if (!strcmp(prop, "name"))
+        return sd_bus_message_append(reply, "s", "synafp");
+    if (!strcmp(prop, "scan-type"))
+        return sd_bus_message_append(reply, "s", "press");
+    if (!strcmp(prop, "num-enroll-stages"))
+        return sd_bus_message_append(reply, "i", 5);
+    if (!strcmp(prop, "finger-present"))
+        return sd_bus_message_append(reply, "b", 0);
+    if (!strcmp(prop, "finger-needed"))
+        return sd_bus_message_append(reply, "b", verify_pid > 0);
+    return sd_bus_error_set_const(e, SD_BUS_ERROR_UNKNOWN_PROPERTY, prop);
+}
+
 static const sd_bus_vtable device_vtable[] = {
     SD_BUS_VTABLE_START(0),
+    SD_BUS_PROPERTY("name", "s", prop_get, 0, SD_BUS_VTABLE_PROPERTY_CONST),
+    SD_BUS_PROPERTY("scan-type", "s", prop_get, 0, SD_BUS_VTABLE_PROPERTY_CONST),
+    SD_BUS_PROPERTY("num-enroll-stages", "i", prop_get, 0, SD_BUS_VTABLE_PROPERTY_CONST),
+    SD_BUS_PROPERTY("finger-present", "b", prop_get, 0,
+                    SD_BUS_VTABLE_PROPERTY_EMITS_CHANGE),
+    SD_BUS_PROPERTY("finger-needed", "b", prop_get, 0,
+                    SD_BUS_VTABLE_PROPERTY_EMITS_CHANGE),
     SD_BUS_METHOD("Claim", "s", "", method_claim, SD_BUS_VTABLE_UNPRIVILEGED),
     SD_BUS_METHOD("Release", "", "", method_release, SD_BUS_VTABLE_UNPRIVILEGED),
     SD_BUS_METHOD("VerifyStart", "s", "", method_verify_start,

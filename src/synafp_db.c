@@ -33,6 +33,25 @@ const char *syna_record_type_name(uint16_t type)
     return "unknown";
 }
 
+/* fprintd's own vocabulary, which its clients match against. Note that thumbs
+ * carry no "-finger" suffix while the other digits do. */
+const char *syna_subtype_fprintd_name(uint16_t subtype)
+{
+    switch (subtype) {
+    case 0xf5: return "right-thumb";
+    case 0xf6: return "right-index-finger";
+    case 0xf7: return "right-middle-finger";
+    case 0xf8: return "right-ring-finger";
+    case 0xf9: return "right-little-finger";
+    case 0xfa: return "left-thumb";
+    case 0xfb: return "left-index-finger";
+    case 0xfc: return "left-middle-finger";
+    case 0xfd: return "left-ring-finger";
+    case 0xfe: return "left-little-finger";
+    }
+    return "any";
+}
+
 const char *syna_subtype_name(uint16_t subtype)
 {
     switch (subtype) {
