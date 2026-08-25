@@ -446,6 +446,14 @@ fail:
     return rc;
 }
 
+int syna_set_timeout(syna_dev *d, unsigned ms)
+{
+    if (!d)
+        return SYNA_ERR_INVAL;
+    d->op_timeout_ms = ms;
+    return SYNA_OK;
+}
+
 int syna_cancel(syna_dev *d)
 {
     if (!d)

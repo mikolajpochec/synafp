@@ -40,7 +40,7 @@ LIB_PIC     := $(LIB_SRC:.c=.lo)
 SOVER       := 1
 SONAME      := libsynafp.so.$(SOVER)
 
-all: synafp $(SONAME)
+all: synafp $(SONAME) pam_synafp.so
 
 %.o: %.c
 	$(CC) $(ALL_CFLAGS) -c $< -o $@
@@ -50,6 +50,9 @@ all: synafp $(SONAME)
 
 synafp: src/synafp_cli.o $(LIB_OBJ)
 	$(CC) $(ALL_CFLAGS) -o $@ $^ $(LDLIBS)
+
+pam_synafp.so: src/pam_synafp.lo $(LIB_PIC)
+	$(CC) $(ALL_CFLAGS) -shared -o $@ $^ $(LDLIBS) -lpam
 
 $(SONAME): $(LIB_PIC)
 	$(CC) $(ALL_CFLAGS) -shared -Wl,-soname,$(SONAME) -o $@ $^ $(LDLIBS)
@@ -64,6 +67,8 @@ install: all
 	install -m 0755 $(SONAME)     $(DESTDIR)$(LIBDIR)/$(SONAME)
 	ln -sf $(SONAME)              $(DESTDIR)$(LIBDIR)/libsynafp.so
 	install -m 0644 src/synafp.h  $(DESTDIR)$(INCLUDEDIR)/synafp.h
+	install -d $(DESTDIR)$(PAMDIR)
+	install -m 0755 pam_synafp.so $(DESTDIR)$(PAMDIR)/pam_synafp.so
 	install -d $(DESTDIR)$(UDEVDIR)
 	install -m 0644 dist/70-synafp.rules $(DESTDIR)$(UDEVDIR)/70-synafp.rules
 	@echo
@@ -74,9 +79,10 @@ uninstall:
 	rm -f $(DESTDIR)$(BINDIR)/synafp
 	rm -f $(DESTDIR)$(LIBDIR)/$(SONAME) $(DESTDIR)$(LIBDIR)/libsynafp.so
 	rm -f $(DESTDIR)$(INCLUDEDIR)/synafp.h
+	rm -f $(DESTDIR)$(PAMDIR)/pam_synafp.so
 	rm -f $(DESTDIR)$(UDEVDIR)/70-synafp.rules
 
-DEPS := $(LIB_OBJ:.o=.d) $(LIB_PIC:.lo=.d) src/synafp_cli.d
+DEPS := $(LIB_OBJ:.o=.d) $(LIB_PIC:.lo=.d) src/synafp_cli.d src/pam_synafp.d
 -include $(DEPS)
 
 clean:

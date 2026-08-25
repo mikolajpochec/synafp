@@ -217,6 +217,10 @@ typedef int (*syna_enroll_cb)(syna_enroll_event ev, int touches, int progress, v
 int syna_enroll(syna_dev *d, const char *username, uint16_t subtype,
                 syna_enroll_cb cb, void *user);
 int syna_db_user_storage(syna_dev *d, const char *name, uint16_t *dbid);
+
+/* Scan a finger and check it belongs to this user. Returns SYNA_ERR_NOT_FOUND
+ * if the user has nothing enrolled. */
+int syna_verify(syna_dev *d, const char *username, syna_match_result *out);
 #define SYNA_CALIB_DEFAULT_PATH "/var/lib/synafp/calib-data.bin"
 
 int syna_load_calibration(syna_dev *d, const char *path);
@@ -228,6 +232,7 @@ int syna_capture(syna_dev *d, syna_capture_mode mode, syna_capture_result *out);
 int syna_glow_start(syna_dev *d);
 int syna_glow_end(syna_dev *d);
 int syna_cancel(syna_dev *d);
+int syna_set_timeout(syna_dev *d, unsigned ms);  /* how long to wait for a finger */
 
 int syna_identify_sensor(syna_dev *d, uint16_t *major, uint16_t *minor);
 int syna_calib_state(syna_dev *d, syna_calib_info *out);

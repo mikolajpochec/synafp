@@ -76,6 +76,7 @@ static void usage(FILE *f)
 "  db          list what is enrolled on the sensor\n"
 "  enroll <finger>  record a finger for this user\n"
 "  calib-import <file>  install per-line calibration data\n"
+"  verify      scan a finger and check it is this user's\n"
 "\n"
 "Finger names: left/right- thumb, index, middle, ring, little\n"
 "\n"
@@ -201,6 +202,27 @@ int main(int argc, char **argv)
                 fprintf(stderr, "synafp: enrolment failed: %s\n", syna_strerror(rc));
                 ret = 1;
             }
+        }
+
+    } else if (!strcmp(cmd, "verify")) {
+        syna_match_result m;
+        const char *who = user ? user : current_user();
+
+        printf("Touch the sensor to verify '%s'...\n", who);
+        fflush(stdout);
+        rc = syna_verify(d, who, &m);
+
+        if (rc == SYNA_ERR_NOT_FOUND) {
+            printf("No fingerprint is enrolled for '%s'.\n", who);
+            ret = 2;
+        } else if (rc != SYNA_OK) {
+            fprintf(stderr, "synafp: verification failed: %s\n", syna_strerror(rc));
+            ret = 1;
+        } else if (m.matched) {
+            printf("Verified: %s (%s)\n", who, syna_subtype_name(m.subtype));
+        } else {
+            printf("Not recognised.\n");
+            ret = 2;
         }
 
     } else if (!strcmp(cmd, "info")) {

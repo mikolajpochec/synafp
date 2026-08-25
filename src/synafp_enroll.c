@@ -490,3 +490,56 @@ out:
     syna_buf_free(&finger);
     return rc;
 }
+
+/* --------------------------------------------------------------------------
+ * Verification
+ *
+ * Matching alone only says which record the finger belongs to. Verifying a
+ * named user means resolving that user's record first and insisting the match
+ * points at it - otherwise any enrolled finger would authenticate anyone.
+ * ----------------------------------------------------------------------- */
+int syna_verify(syna_dev *d, const char *username, syna_match_result *out)
+{
+    syna_buf ident = { 0 };
+    syna_capture_result cr;
+    uint16_t storage = 0, expected = 0;
+    int rc;
+
+    if (!d || !username || !out)
+        return SYNA_ERR_INVAL;
+    memset(out, 0, sizeof *out);
+
+    if (!d->type_info && (rc = syna_sensor_setup(d)) != SYNA_OK)
+        return rc;
+
+    if ((rc = syna_identity_for_user(username, &ident)) != SYNA_OK)
+        goto out;
+
+    if ((rc = syna_db_user_storage(d, "StgWindsor", &storage)) != SYNA_OK)
+        goto out;
+
+    /* SYNA_ERR_NOT_FOUND here means this user has nothing enrolled, which the
+     * caller should treat as "unavailable", not "rejected". */
+    if ((rc = syna_db_lookup_user(d, storage, ident.p, ident.len, &expected)) != SYNA_OK)
+        goto out;
+
+    syna_glow_start(d);
+    rc = syna_capture(d, SYNA_CAPTURE_IDENTIFY, &cr);
+    if (rc != SYNA_OK) {
+        syna_glow_end(d);
+        goto out;
+    }
+
+    rc = syna_match(d, out);
+    syna_glow_end(d);
+    if (rc != SYNA_OK)
+        goto out;
+
+    if (out->matched && out->user_id != expected) {
+        syna_dbg("finger belongs to record #%u, not #%u", out->user_id, expected);
+        out->matched = 0;
+    }
+out:
+    syna_buf_free(&ident);
+    return rc;
+}
