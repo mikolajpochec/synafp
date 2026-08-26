@@ -89,21 +89,7 @@ protector, `_FORTIFY_SOURCE`); derived keys are wiped on close and the DMI
 serial is never logged; `tools/fuzzparse.c` runs the device-facing parsers
 under ASan and UBSan. The PAM module is the exception — it must stay root.
 
-## How it works
-
-Commands go out on bulk endpoint `0x01`, replies come back on `0x81` behind a
-little-endian status word. Almost everything requires a TLS 1.2 session,
-tunnelled through command `0x44` during the handshake and then carried as bare
-TLS records. It is TLS in shape but not in detail — cipher suite `0xC005`, and
-several length fields that are wrong per RFC 5246 and must be reproduced
-wrongly to interoperate, so a stock TLS library cannot be pointed at it.
-
-Client credentials live in the sensor's own flash (partition 1, readable
-without a session), with the private key encrypted under a key derived from
-this machine's DMI identity — that is what binds a paired sensor to one
-laptop. A scan is driven by a *program* of type/length/value chunks the
-firmware executes; a stock program per sensor type is patched before every
-scan with the sensor geometry and calibration spliced in.
+## Contributing
 
 ```
 src/synafp_core.c     USB transport, discovery, session lifecycle
@@ -114,13 +100,45 @@ src/synafp_db.c       on-sensor template database
 src/synafp_enroll.c   enrolment and verification
 src/synafp_auth.c     setuid helper for unprivileged callers
 src/synafp_fprintd.c  fprintd-compatible D-Bus service
-src/synafp_tables.c   GENERATED — see tools/gen_tables.py
+src/synafp_tables.c   GENERATED - see tools/gen_tables.py
 ```
+
+**Testing.** `tools/fuzzparse.c` hammers the parsers reachable from device
+replies; run it under sanitizers, since the sensor is not a trusted input:
+
+```sh
+make fuzzparse CFLAGS="-O1 -g -fsanitize=address,undefined" && ./fuzzparse
+```
+
+`tools/pamtest.c` exercises the PAM module against a throwaway service, so you
+never have to experiment on a real login path. `synafp progdump` prints the
+generated capture program without sending it — diff it against a known-good
+implementation when touching `synafp_capture.c`.
+
+**Adding a sensor.** Identification is table-driven; `synafp sensor` reports
+the model and type of an unrecognised device. Capture additionally needs
+per-type data — geometry, a capture program, initialisation blobs — added to
+`SUPPORTED` and `DEVICES` in `tools/gen_tables.py`, then regenerated:
+
+```sh
+python3 tools/gen_tables.py > src/synafp_tables.c
+```
+
+That needs python-validity importable. The generated file is committed so
+building synafp never depends on it. Only the type 1 line-update variant is
+implemented; the table records which variant a sensor needs, so an unsupported
+one fails cleanly rather than wedging the firmware.
+
+**Debugging.** `-v` traces the protocol, `-vv` adds hex dumps. Most failures
+are environmental rather than protocol bugs: another daemon holding the
+sensor, missing calibration, or a sandbox denying something the driver needs.
+The error messages name these cases directly - trust them before reaching for
+a hex dump.
 
 LGPL-2.1-or-later. The capture programs, geometry tables and initialisation
 blobs originate in Synaptics' Windows driver and are reproduced as
 [python-validity](https://github.com/uunicorn/python-validity) distributes
 them; `tools/gen_tables.py` extracts them from that project. This driver is an
-independent implementation — python-validity served as protocol documentation
+independent implementation - python-validity served as protocol documentation
 and as a correctness oracle, and the generated capture programs are verified
 byte-identical against it.
