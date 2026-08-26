@@ -120,14 +120,22 @@ static int method_claim(sd_bus_message *m, void *u, sd_bus_error *e)
     r = sd_bus_message_read(m, "s", &who);
     if (r < 0) return r;
 
-    /* An empty username means "whoever is calling". */
+    /* Lockers claim with an empty username, meaning "whoever is calling".
+     * sd_bus_message_get_creds() only returns credentials that were negotiated
+     * up front; asking the bus for them is what actually works. */
     if (!who || !*who) {
-        sd_bus_creds *c = sd_bus_message_get_creds(m);
+        sd_bus_creds *c = NULL;
         uid_t uid;
-        if (c && sd_bus_creds_get_euid(c, &uid) >= 0) {
-            struct passwd *pw = getpwuid(uid);
-            if (pw && pw->pw_name)
-                who = pw->pw_name;
+
+        if (sd_bus_query_sender_creds(m, SD_BUS_CREDS_EUID, &c) >= 0) {
+            if (sd_bus_creds_get_euid(c, &uid) >= 0) {
+                struct passwd *pw = getpwuid(uid);
+                if (pw && pw->pw_name) {
+                    who = pw->pw_name;
+                    syslog(LOG_INFO, "claim with no username, using caller '%s'", who);
+                }
+            }
+            sd_bus_creds_unref(c);
         }
     }
     if (!who || !*who)
@@ -345,6 +353,11 @@ int main(void)
 
     r = sd_bus_open_system(&bus);
     if (r < 0) { syslog(LOG_ERR, "sd_bus_open_system: %s", strerror(-r)); return 1; }
+
+    /* Have the bus attach the sender's uid to incoming messages. */
+    r = sd_bus_negotiate_creds(bus, 1, SD_BUS_CREDS_EUID | SD_BUS_CREDS_PID);
+    if (r < 0)
+        syslog(LOG_WARNING, "could not negotiate creds: %s", strerror(-r));
 
     r = sd_bus_add_object_vtable(bus, NULL, MANAGER_PATH,
                                  "net.reactivated.Fprint.Manager",
