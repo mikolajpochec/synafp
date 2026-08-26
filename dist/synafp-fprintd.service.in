@@ -11,17 +11,12 @@ ExecStart=@LIBEXECDIR@/synafp-fprintd
 Restart=on-failure
 RestartSec=2
 
-# It needs root for the DMI read and the USB claim, and nothing else.
+# Deliberately minimal. This service must be root to read the DMI serial and
+# claim the USB device, so a sandbox buys little, and tightening it has twice
+# broken the sensor path in ways that looked like driver bugs. The scanning
+# itself happens in a short-lived unprivileged child.
 NoNewPrivileges=no
-ProtectSystem=strict
-ProtectHome=yes
-ReadWritePaths=/var/lib/synafp
 PrivateTmp=yes
-ProtectKernelTunables=yes
-ProtectControlGroups=yes
-# libusb enumerates through udev, which needs a netlink socket. Without
-# AF_NETLINK libusb_init() fails outright and every scan reports a USB error.
-RestrictAddressFamilies=AF_UNIX AF_NETLINK
 
 [Install]
 WantedBy=multi-user.target

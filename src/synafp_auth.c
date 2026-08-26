@@ -20,6 +20,7 @@
 #define _DEFAULT_SOURCE
 #define _GNU_SOURCE
 
+#include <errno.h>
 #include <fcntl.h>
 #include <signal.h>
 #include <pwd.h>
@@ -127,6 +128,13 @@ int main(int argc, char **argv)
         syna_close(d);
         return EXIT_UNAVAILABLE;
     }
+
+    /* Without the per-line calibration table the sensor arms but completes a
+     * scan instantly on nothing, which surfaces as an endless no-match. It is
+     * the first thing to check when that happens. */
+    if (access(SYNA_CALIB_DEFAULT_PATH, R_OK) != 0)
+        fprintf(stderr, "synafp-auth: cannot read %s: %s\n",
+                SYNA_CALIB_DEFAULT_PATH, strerror(errno));
 
     g_dev = d;
     install_signal_handlers();
