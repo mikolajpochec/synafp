@@ -7,9 +7,15 @@
  * input - which is why fingerprint-through-PAM only ever wakes the reader
  * after a password has been typed.
  *
- * This implements the subset of net.reactivated.Fprint that lockers use, and
- * does the actual verification by running synafp-auth, so the scanning code
- * runs in a short-lived process that can be cancelled by killing it.
+ * This implements the subset of net.reactivated.Fprint that desktop shells
+ * and screen lockers use:
+ *   - VerifyStart/Stop for lock-screen authentication
+ *   - EnrollStart/Stop for the Settings fingerprint panel
+ *   - DeleteEnrolledFingers for removing prints
+ *   - ListEnrolledFingers for listing what's stored
+ *
+ * Verification runs synafp-auth; enrollment runs synafp-enroll-helper.
+ * Both are short-lived child processes that can be cancelled by SIGTERM.
  *
  * SPDX-License-Identifier: LGPL-2.1-or-later
  */
@@ -17,6 +23,7 @@
 #define _DEFAULT_SOURCE
 
 #include <errno.h>
+#include <fcntl.h>
 #include <pwd.h>
 #include <signal.h>
 #include <stdio.h>
@@ -35,6 +42,10 @@
 #define SYNAFP_HELPER "/usr/local/libexec/synafp-auth"
 #endif
 
+#ifndef SYNAFP_ENROLL_HELPER
+#define SYNAFP_ENROLL_HELPER "/usr/local/libexec/synafp-enroll-helper"
+#endif
+
 #define MANAGER_PATH "/net/reactivated/Fprint/Manager"
 #define DEVICE_PATH  "/net/reactivated/Fprint/Device/0"
 #define DEVICE_IFACE "net.reactivated.Fprint.Device"
@@ -42,23 +53,39 @@
 static sd_bus       *bus;
 static sd_event     *event;
 static char          claimed_user[256];
+
+/* --- verify state -------------------------------------------------------- */
 static pid_t         verify_pid;
 static sd_event_source *verify_source;
 
-static void emit_status(const char *result, int done)
+/* --- enroll state -------------------------------------------------------- */
+static pid_t         enroll_pid;
+static sd_event_source *enroll_exit_source;
+static sd_event_source *enroll_pipe_source;
+static int           enroll_pipe_fd = -1;
+static char          enroll_buf[1024];
+static size_t        enroll_buf_len;
+
+static void emit_verify_status(const char *result, int done)
 {
     syslog(LOG_DEBUG, "VerifyStatus %s done=%d", result, done);
     sd_bus_emit_signal(bus, DEVICE_PATH, DEVICE_IFACE, "VerifyStatus",
                        "sb", result, done);
 }
 
+static void emit_enroll_status(const char *status, int done)
+{
+    syslog(LOG_DEBUG, "EnrollStatus %s done=%d", status, done);
+    sd_bus_emit_signal(bus, DEVICE_PATH, DEVICE_IFACE, "EnrollStatus",
+                       "sb", status, (int)done);
+}
+
 /* The helper's exit status, translated into fprintd's vocabulary. */
-static const char *result_for_exit(int code)
+static const char *verify_result_for_exit(int code)
 {
     switch (code) {
     case 0:  return "verify-match";
     case 1:  return "verify-no-match";
-    case 2:  return "verify-unknown-error";   /* no sensor, nothing enrolled, timeout */
     default: return "verify-unknown-error";
     }
 }
@@ -71,7 +98,7 @@ static int on_verify_exit(sd_event_source *s, const siginfo_t *si, void *userdat
     verify_pid = 0;
     verify_source = sd_event_source_unref(verify_source);
 
-    emit_status(result_for_exit(code), 1);
+    emit_verify_status(verify_result_for_exit(code), 1);
     return 0;
 }
 
@@ -84,6 +111,115 @@ static int stop_verify(void)
     }
     verify_source = sd_event_source_unref(verify_source);
     return 0;
+}
+
+/* --- enroll helpers ------------------------------------------------------ */
+static void process_enroll_line(const char *line)
+{
+    char status[64];
+    int stage = 0;
+
+    if (sscanf(line, "%63s %d", status, &stage) < 1)
+        return;
+
+    /* Translate helper status into fprintd status strings.
+     *
+     * GNOME Settings tracks enrollment by counting enroll-stage-passed
+     * signals against num-enroll-stages.  After each stage-passed, it
+     * shows a 750ms success tick then resets to the "place your finger"
+     * prompt via a timeout.  We must NOT emit enroll-compare-scan between
+     * stages because it cancels that timeout and hides the prompt.
+     *
+     * Mapping:
+     *   enroll-finger-present → (suppressed, timeout handles prompt)
+     *   enroll-compare-scan   → enroll-stage-passed  (touch accepted)
+     *   enroll-finger-duplicate → enroll-retry-scan  (bad touch)
+     *   enroll-result 1       → enroll-completed     (done=true)
+     *   enroll-result 0       → enroll-failed        (done=true)
+     */
+    if (!strcmp(status, "enroll-compare-scan"))
+        emit_enroll_status("enroll-stage-passed", 0);
+    else if (!strcmp(status, "enroll-finger-duplicate"))
+        emit_enroll_status("enroll-retry-scan", 0);
+    else if (!strcmp(status, "enroll-result"))
+        emit_enroll_status(stage ? "enroll-completed" : "enroll-failed", 1);
+}
+
+static int on_enroll_pipe_ready(sd_event_source *s, int fd, uint32_t revents, void *userdata)
+{
+    (void)s; (void)userdata;
+
+    if (!(revents & EPOLLIN))
+        return 0;
+
+    ssize_t n = read(fd, enroll_buf + enroll_buf_len,
+                     sizeof enroll_buf - enroll_buf_len - 1);
+    if (n <= 0) {
+        if (n == 0) {
+            /* EOF: child closed its stdout. */
+            sd_event_source_set_enabled(enroll_pipe_source, SD_EVENT_OFF);
+        }
+        return 0;
+    }
+
+    enroll_buf_len += n;
+    enroll_buf[enroll_buf_len] = '\0';
+
+    /* Process complete lines. */
+    char *nl;
+    while ((nl = memchr(enroll_buf, '\n', enroll_buf_len)) != NULL) {
+        *nl = '\0';
+        process_enroll_line(enroll_buf);
+        size_t consumed = (size_t)(nl - enroll_buf) + 1;
+        memmove(enroll_buf, nl + 1, enroll_buf_len - consumed);
+        enroll_buf_len -= consumed;
+    }
+
+    return 0;
+}
+
+static int on_enroll_exit(sd_event_source *s, const siginfo_t *si, void *userdata)
+{
+    int code = (si->si_code == CLD_EXITED) ? si->si_status : 2;
+
+    (void)s; (void)userdata;
+    enroll_pid = 0;
+    enroll_exit_source = sd_event_source_unref(enroll_exit_source);
+
+    /* Flush any remaining partial line. */
+    if (enroll_buf_len > 0) {
+        enroll_buf[enroll_buf_len] = '\0';
+        process_enroll_line(enroll_buf);
+        enroll_buf_len = 0;
+    }
+
+    /* Drain the pipe to get any remaining data. */
+    if (enroll_pipe_fd >= 0) {
+        char tmp[256];
+        while (read(enroll_pipe_fd, tmp, sizeof tmp) > 0)
+            ;
+    }
+
+    /* Emit final status. */
+    emit_enroll_status(code == 0 ? "enroll-completed" : "enroll-failed", 1);
+
+    return 0;
+}
+
+static void stop_enroll(void)
+{
+    if (enroll_pid > 0) {
+        kill(enroll_pid, SIGTERM);
+        waitpid(enroll_pid, NULL, 0);
+        enroll_pid = 0;
+    }
+    enroll_exit_source = sd_event_source_unref(enroll_exit_source);
+    enroll_pipe_source = sd_event_source_unref(enroll_pipe_source);
+    if (enroll_pipe_fd >= 0) {
+        close(enroll_pipe_fd);
+        enroll_pipe_fd = -1;
+    }
+    enroll_buf_len = 0;
 }
 
 /* --- Manager ------------------------------------------------------------ */
@@ -120,9 +256,7 @@ static int method_claim(sd_bus_message *m, void *u, sd_bus_error *e)
     r = sd_bus_message_read(m, "s", &who);
     if (r < 0) return r;
 
-    /* Lockers claim with an empty username, meaning "whoever is calling".
-     * sd_bus_message_get_creds() only returns credentials that were negotiated
-     * up front; asking the bus for them is what actually works. */
+    /* Lockers claim with an empty username, meaning "whoever is calling". */
     if (!who || !*who) {
         sd_bus_creds *c = NULL;
         uid_t uid;
@@ -151,10 +285,12 @@ static int method_release(sd_bus_message *m, void *u, sd_bus_error *e)
 {
     (void)u; (void)e;
     stop_verify();
+    stop_enroll();
     claimed_user[0] = '\0';
     return sd_bus_reply_method_return(m, "");
 }
 
+/* --- Verify ------------------------------------------------------------- */
 static int method_verify_start(sd_bus_message *m, void *u, sd_bus_error *e)
 {
     const char *finger = NULL;
@@ -168,9 +304,9 @@ static int method_verify_start(sd_bus_message *m, void *u, sd_bus_error *e)
     if (!claimed_user[0])
         return sd_bus_error_set_const(e, "net.reactivated.Fprint.Error.ClaimDevice",
                                       "device has not been claimed");
-    if (verify_pid > 0)
+    if (verify_pid > 0 || enroll_pid > 0)
         return sd_bus_error_set_const(e, "net.reactivated.Fprint.Error.AlreadyInUse",
-                                      "a verification is already running");
+                                      "device is busy");
 
     pid = fork();
     if (pid < 0)
@@ -202,7 +338,123 @@ static int method_verify_stop(sd_bus_message *m, void *u, sd_bus_error *e)
     return sd_bus_reply_method_return(m, "");
 }
 
-/* Some shells ask this before offering fingerprint at all. */
+/* --- Enroll ------------------------------------------------------------- */
+static int method_enroll_start(sd_bus_message *m, void *u, sd_bus_error *e)
+{
+    const char *finger = NULL;
+    int pipefd[2] = { -1, -1 };
+    pid_t pid;
+    int r;
+
+    (void)u;
+    r = sd_bus_message_read(m, "s", &finger);
+    if (r < 0) return r;
+
+    if (!claimed_user[0])
+        return sd_bus_error_set_const(e, "net.reactivated.Fprint.Error.ClaimDevice",
+                                      "device has not been claimed");
+    if (verify_pid > 0 || enroll_pid > 0)
+        return sd_bus_error_set_const(e, "net.reactivated.Fprint.Error.AlreadyInUse",
+                                      "device is busy");
+    if (!finger || !*finger)
+        return sd_bus_error_set_const(e, "net.reactivated.Fprint.Error.InvalidFinger",
+                                      "no finger name given");
+
+    if (pipe(pipefd) < 0)
+        return sd_bus_error_set_errno(e, errno);
+
+    pid = fork();
+    if (pid < 0) {
+        close(pipefd[0]);
+        close(pipefd[1]);
+        return sd_bus_error_set_errno(e, errno);
+    }
+
+    if (pid == 0) {
+        /* Child: close read end, exec helper with pipe as stdout. */
+        close(pipefd[0]);
+        if (pipefd[1] != 1) {
+            dup2(pipefd[1], 1);
+            close(pipefd[1]);
+        }
+        execl(SYNAFP_ENROLL_HELPER, "synafp-enroll-helper",
+              claimed_user, finger, (char *) NULL);
+        _exit(2);
+    }
+
+    /* Parent: close write end, set up pipe reading. */
+    close(pipefd[1]);
+    enroll_pipe_fd = pipefd[0];
+
+    /* Set pipe non-blocking for the event loop. */
+    int flags = fcntl(enroll_pipe_fd, F_GETFL, 0);
+    fcntl(enroll_pipe_fd, F_SETFL, flags | O_NONBLOCK);
+
+    enroll_pid = pid;
+    enroll_buf_len = 0;
+
+    r = sd_event_add_child(event, &enroll_exit_source, pid, WEXITED,
+                           on_enroll_exit, NULL);
+    if (r < 0) {
+        stop_enroll();
+        return sd_bus_error_set_errno(e, -r);
+    }
+
+    r = sd_event_add_io(event, &enroll_pipe_source, enroll_pipe_fd, EPOLLIN,
+                        on_enroll_pipe_ready, NULL);
+    if (r < 0) {
+        stop_enroll();
+        return sd_bus_error_set_errno(e, -r);
+    }
+
+    syslog(LOG_INFO, "enrolling '%s' finger '%s'", claimed_user, finger);
+    return sd_bus_reply_method_return(m, "");
+}
+
+static int method_enroll_stop(sd_bus_message *m, void *u, sd_bus_error *e)
+{
+    (void)u; (void)e;
+    stop_enroll();
+    return sd_bus_reply_method_return(m, "");
+}
+
+/* --- Delete ------------------------------------------------------------- */
+static int method_delete_fingers(sd_bus_message *m, void *u, sd_bus_error *e)
+{
+    const char *who = NULL;
+    syna_dev *d = NULL;
+    int r, removed = 0;
+
+    (void)u;
+    r = sd_bus_message_read(m, "s", &who);
+    if (r < 0) return r;
+
+    if (!who || !*who)
+        return sd_bus_error_set_const(e, "net.reactivated.Fprint.Error.Internal",
+                                      "no username given");
+
+    if (verify_pid > 0 || enroll_pid > 0)
+        return sd_bus_error_set_const(e, "net.reactivated.Fprint.Error.AlreadyInUse",
+                                      "device is busy");
+
+    r = syna_open(&d, NULL, 0);
+    if (r != SYNA_OK)
+        return sd_bus_error_set_const(e, "net.reactivated.Fprint.Error.Internal",
+                                      "cannot open sensor");
+
+    /* Delete all fingers (subtype < 0). */
+    r = syna_delete(d, who, -1, &removed);
+    syna_close(d);
+
+    if (r != SYNA_OK && r != SYNA_ERR_NOT_FOUND)
+        return sd_bus_error_set_const(e, "net.reactivated.Fprint.Error.Internal",
+                                      "deletion failed");
+
+    syslog(LOG_INFO, "deleted %d finger(s) for '%s'", removed, who);
+    return sd_bus_reply_method_return(m, "");
+}
+
+/* --- List --------------------------------------------------------------- */
 static int method_list_enrolled(sd_bus_message *m, void *u, sd_bus_error *e)
 {
     const char *who = NULL;
@@ -221,7 +473,8 @@ static int method_list_enrolled(sd_bus_message *m, void *u, sd_bus_error *e)
     if (r < 0) return r;
 
     /* Skip the device entirely while a scan is in flight. */
-    if (verify_pid == 0 && syna_open(&d, NULL, 0) == SYNA_OK) {
+    if (verify_pid == 0 && enroll_pid == 0 &&
+        syna_open(&d, NULL, 0) == SYNA_OK) {
         uint16_t storage = 0, userid = 0;
         syna_user_info ui;
 
@@ -244,6 +497,7 @@ static int method_list_enrolled(sd_bus_message *m, void *u, sd_bus_error *e)
     return sd_bus_send(NULL, reply, NULL);
 }
 
+/* --- vtables ------------------------------------------------------------ */
 static const sd_bus_vtable manager_vtable[] = {
     SD_BUS_VTABLE_START(0),
     SD_BUS_METHOD("GetDefaultDevice", "", "o", method_get_default_device,
@@ -269,7 +523,8 @@ static int append_prop(sd_bus_message *reply, const char *prop)
     if (!strcmp(prop, "finger-present"))
         return sd_bus_message_append(reply, "v", "b", 0);
     if (!strcmp(prop, "finger-needed"))
-        return sd_bus_message_append(reply, "v", "b", verify_pid > 0);
+        return sd_bus_message_append(reply, "v", "b",
+                                     verify_pid > 0 || enroll_pid > 0);
     return -ENOENT;
 }
 
@@ -330,9 +585,16 @@ static const sd_bus_vtable device_vtable[] = {
                   SD_BUS_VTABLE_UNPRIVILEGED),
     SD_BUS_METHOD("VerifyStop", "", "", method_verify_stop,
                   SD_BUS_VTABLE_UNPRIVILEGED),
+    SD_BUS_METHOD("EnrollStart", "s", "", method_enroll_start,
+                  SD_BUS_VTABLE_UNPRIVILEGED),
+    SD_BUS_METHOD("EnrollStop", "", "", method_enroll_stop,
+                  SD_BUS_VTABLE_UNPRIVILEGED),
+    SD_BUS_METHOD("DeleteEnrolledFingers", "s", "", method_delete_fingers,
+                  SD_BUS_VTABLE_UNPRIVILEGED),
     SD_BUS_METHOD("ListEnrolledFingers", "s", "as", method_list_enrolled,
                   SD_BUS_VTABLE_UNPRIVILEGED),
     SD_BUS_SIGNAL("VerifyStatus", "sb", 0),
+    SD_BUS_SIGNAL("EnrollStatus", "sb", 0),
     SD_BUS_VTABLE_END
 };
 
@@ -390,6 +652,7 @@ int main(void)
         syslog(LOG_ERR, "event loop: %s", strerror(-r));
 
     stop_verify();
+    stop_enroll();
     sd_bus_unref(bus);
     sd_event_unref(event);
     closelog();

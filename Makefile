@@ -45,7 +45,8 @@ CFLAGS      ?= -O2 -g
 # change cannot leave stale objects with mismatched layouts.
 ALL_CFLAGS  := -std=c99 $(WARN) $(HARDEN) $(CFLAGS) $(USB_CFLAGS) $(SSL_CFLAGS) -Isrc \
                -MMD -MP -DSYNA_STATEDIR=\"$(STATEDIR)\" \
-               -DSYNAFP_HELPER=\"$(LIBEXECDIR)/synafp-auth\"
+               -DSYNAFP_HELPER=\"$(LIBEXECDIR)/synafp-auth\" \
+               -DSYNAFP_ENROLL_HELPER=\"$(LIBEXECDIR)/synafp-enroll-helper\"
 LDLIBS      := $(USB_LIBS) $(SSL_LIBS)
 
 LIB_SRC     := src/synafp_core.c src/synafp_vcsfw.c src/synafp_tls.c \
@@ -61,7 +62,7 @@ ifeq ($(HAVE_SDBUS),yes)
 DBUS_TARGETS := synafp-fprintd
 endif
 
-all: synafp synafp-auth $(SONAME) pam_synafp.so $(DBUS_TARGETS)
+all: synafp synafp-auth synafp-enroll-helper $(SONAME) pam_synafp.so $(DBUS_TARGETS)
 
 %.o: %.c
 	$(CC) $(ALL_CFLAGS) -c $< -o $@
@@ -79,6 +80,9 @@ src/synafp_fprintd.o: src/synafp_fprintd.c
 	$(CC) $(ALL_CFLAGS) $(SDBUS_CFLAGS) -c $< -o $@
 
 synafp-auth: src/synafp_auth.o $(LIB_OBJ)
+	$(CC) $(ALL_CFLAGS) $(HARDEN_LD) -o $@ $^ $(LDLIBS)
+
+synafp-enroll-helper: src/synafp_enroll_helper.o $(LIB_OBJ)
 	$(CC) $(ALL_CFLAGS) $(HARDEN_LD) -o $@ $^ $(LDLIBS)
 
 pam_synafp.so: src/pam_synafp.lo $(LIB_PIC)
@@ -108,6 +112,7 @@ install: all
 	# setuid: screen lockers authenticate as the locked-out user and cannot
 	# reach the DMI serial themselves.
 	install -m 4755 synafp-auth   $(DESTDIR)$(LIBEXECDIR)/synafp-auth
+	install -m 0755 synafp-enroll-helper $(DESTDIR)$(LIBEXECDIR)/synafp-enroll-helper
 ifeq ($(HAVE_SDBUS),yes)
 	install -m 0755 synafp-fprintd $(DESTDIR)$(LIBEXECDIR)/synafp-fprintd
 	install -d $(DESTDIR)$(UNITDIR)
@@ -135,6 +140,7 @@ endif
 uninstall:
 	rm -f $(DESTDIR)$(BINDIR)/synafp
 	rm -f $(DESTDIR)$(LIBEXECDIR)/synafp-auth
+	rm -f $(DESTDIR)$(LIBEXECDIR)/synafp-enroll-helper
 	rm -f $(DESTDIR)$(LIBEXECDIR)/synafp-fprintd
 	rm -f $(DESTDIR)$(UNITDIR)/synafp-fprintd.service
 	rm -f $(DESTDIR)$(LIBDIR)/$(SONAME) $(DESTDIR)$(LIBDIR)/libsynafp.so
@@ -143,11 +149,11 @@ uninstall:
 	rm -f $(DESTDIR)$(UDEVDIR)/70-synafp.rules
 
 DEPS := $(LIB_OBJ:.o=.d) $(LIB_PIC:.lo=.d) src/synafp_cli.d src/pam_synafp.d \
-        src/synafp_auth.d
+        src/synafp_auth.d src/synafp_enroll_helper.d
 -include $(DEPS)
 
 clean:
-	rm -f synafp synafp-auth synafp-fprintd pamtest fuzzparse synafp-test $(LIB_OBJ) $(LIB_PIC) src/*.o src/*.lo src/*.d \
+	rm -f synafp synafp-auth synafp-enroll-helper synafp-fprintd pamtest fuzzparse synafp-test $(LIB_OBJ) $(LIB_PIC) src/*.o src/*.lo src/*.d \
 	      libsynafp.so libsynafp.so.* pam_synafp.so
 
 .PHONY: all install uninstall clean check pamtest

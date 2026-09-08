@@ -31,7 +31,12 @@ int syna_subtype_from_name(const char *name)
         { "right-thumb", 0xf5 }, { "right-index",  0xf6 }, { "right-middle", 0xf7 },
         { "right-ring",  0xf8 }, { "right-little", 0xf9 }, { "left-thumb",   0xfa },
         { "left-index",  0xfb }, { "left-middle",  0xfc }, { "left-ring",    0xfd },
-        { "left-little", 0xfe }
+        { "left-little", 0xfe },
+        /* fprintd D-Bus names: non-thumb fingers carry a "-finger" suffix. */
+        { "right-index-finger",  0xf6 }, { "right-middle-finger", 0xf7 },
+        { "right-ring-finger",   0xf8 }, { "right-little-finger", 0xf9 },
+        { "left-index-finger",   0xfb }, { "left-middle-finger",  0xfc },
+        { "left-ring-finger",    0xfd }, { "left-little-finger",  0xfe }
     };
     size_t i;
 
